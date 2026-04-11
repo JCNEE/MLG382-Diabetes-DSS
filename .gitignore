@@ -1,0 +1,63 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Test, lint, and coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging and build outputs
+build/
+dist/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Local environment and secrets
+.env
+.env.*
+*.env
+.python-version
+
+# Logs and local databases
+*.log
+*.db
+*.sqlite3
+
+# Generated models and experiment outputs
+artifacts/
+mlruns/
+wandb/
+*.joblib
+*.pkl
+*.pickle
+*.sav
+*.onnx
+*.h5
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
