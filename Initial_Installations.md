@@ -11,6 +11,7 @@ The point of this is to create virtual environments for your own devices for thi
 #VERY IMPORTANT:#
 To Activate the Virtual Environment and install python libraries run this command
 
+- cd "MLG382-Diabetes-DSS"
 - venv\Scripts\activate
 
 #2) Installing packages for Python#
