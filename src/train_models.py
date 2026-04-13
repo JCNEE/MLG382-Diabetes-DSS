@@ -295,10 +295,10 @@ def main():
     
     print("\n MODELS SAVED:")
     print(f"   {MODELS_DIR}")
-    print(f"   ├── decision_tree.pkl")
-    print(f"   ├── random_forest.pkl")
-    print(f"   ├── xgboost.pkl")
-    print(f"   └── kmeans.pkl")
+    print(f"   decision_tree.pkl")
+    print(f"   random_forest.pkl")
+    print(f"   xgboost.pkl")
+    print(f"   kmeans.pkl")
     
     print("\nPERFORMANCE SUMMARY:")
     print(f"    Best Risk Classifier: {best_model} ({best_accuracy:.4f})")
