@@ -174,7 +174,7 @@ def Save_data(X_train, y_train, X_test, y_test, X_train_scaled, X_test_scaled):
 #==============================================================
 # 7. Main pipeline
 #==============================================================
-#this runs the functions that was created 
+#this runs the functions that was created, encodes the data for the models, and saves the data
 
 def preprocess_data():
     #loads the data that was split in the "prepare data" file
