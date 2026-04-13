@@ -175,4 +175,141 @@ def train_xgboost(X_train, X_test, y_train, y_test, target_encoder):
     
     return xgb_model, accuracy
 
+# ==============================================================
+# Patient Segmentation - K-Means Clustering
+# ==============================================================
 
+def train_kmeans(X_train_scaled, feature_names):
+    """Train K-Means clustering with K=3"""
+    print("\n" + "="*60)
+    print(" K-MEANS CLUSTERING (Patient Segmentation)")
+    print("="*60)
+    print("   Clustering patients into 3 lifestyle/health segments")
+    
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+    cluster_labels = kmeans.fit_predict(X_train_scaled)
+    
+    sil_score = silhouette_score(X_train_scaled, cluster_labels)
+    
+    print(f"\nSilhouette Score: {sil_score:.4f}")
+    
+    print("\n Cluster Distribution:")
+    cluster_counts = np.bincount(cluster_labels)
+    for i, count in enumerate(cluster_counts):
+        percentage = count / len(cluster_labels) * 100
+        print(f"   Cluster {i}: {count:,} patients ({percentage:.1f}%)")
+    
+    with open(MODELS_DIR / 'kmeans.pkl', 'wb') as f:
+        pickle.dump(kmeans, f)
+    print(f"\n Model saved: {MODELS_DIR / 'kmeans.pkl'}")
+    
+    pd.Series(cluster_labels, name='cluster').to_csv(DATA_DIR / 'train_clusters.csv', index=False)
+    
+    return kmeans, cluster_labels, sil_score
+
+def compare_models(results):
+    """Compare all three classification models"""
+    print("\n" + "="*60)
+    print("MODEL COMPARISON SUMMARY")
+    print("="*60)
+    
+    comparison = pd.DataFrame([
+        {'Model': 'Decision Tree', 'Accuracy': results['Decision Tree']},
+        {'Model': 'Random Forest', 'Accuracy': results['Random Forest']},
+        {'Model': 'XGBoost', 'Accuracy': results['XGBoost']}
+    ]).sort_values('Accuracy', ascending=False)
+    
+    print(comparison.to_string(index=False))
+    
+    best_model = comparison.iloc[0]['Model']
+    best_accuracy = comparison.iloc[0]['Accuracy']
+    
+    print(f"\n BEST MODEL: {best_model} with {best_accuracy:.4f} accuracy")
+    
+    comparison.to_csv(ARTIFACTS_DIR / 'model_comparison.csv', index=False)
+    
+    return best_model, best_accuracy
+
+# ==============================================================
+# Main Execution
+# ==============================================================
+
+def main():
+    print("="*60)
+    print("DIABETES DECISION SUPPORT SYSTEM")
+    print("="*60)
+    print("\n Tasks:")
+    print("   1. Risk Classification (Decision Tree, Random Forest, XGBoost)")
+    print("   2. Patient Segmentation (K-Means with K=3)")
+    
+    # Load data
+    data = load_data()
+    
+    # ==========================================================
+    # PART 1: RISK CLASSIFICATION
+    # ==========================================================
+    print("\n" + "="*60)
+    print("PART 1: RISK CLASSIFICATION")
+    print("="*60)
+    
+    results = {}
+    
+    # Train Decision Tree
+    dt_model, dt_acc = train_decision_tree(
+        data['X_train'], data['X_test'],
+        data['y_train'], data['y_test'],
+        data['target_encoder']
+    )
+    results['Decision Tree'] = dt_acc
+    
+    # Train Random Forest
+    rf_model, rf_acc = train_random_forest(
+        data['X_train'], data['X_test'],
+        data['y_train'], data['y_test'],
+        data['target_encoder']
+    )
+    results['Random Forest'] = rf_acc
+    
+    # Train XGBoost
+    xgb_model, xgb_acc = train_xgboost(
+        data['X_train'], data['X_test'],
+        data['y_train'], data['y_test'],
+        data['target_encoder']
+    )
+    results['XGBoost'] = xgb_acc
+    
+    # Compare models
+    best_model, best_accuracy = compare_models(results)
+    
+    # ==========================================================
+    # PART 2: PATIENT SEGMENTATION
+    # ==========================================================
+    print("\n" + "="*60)
+    print("PART 2: PATIENT SEGMENTATION")
+    print("="*60)
+    
+    kmeans_model, cluster_labels, sil_score = train_kmeans(
+        data['X_train_scaled'],
+        data['X_train'].columns.tolist()
+    )
+    
+    # ==========================================================
+    # FINAL SUMMARY
+    # ==========================================================
+    print("\n" + "="*60)
+    print(" TRAINING COMPLETE!")
+    print("="*60)
+    
+    print("\n MODELS SAVED:")
+    print(f"   {MODELS_DIR}")
+    print(f"   ├── decision_tree.pkl")
+    print(f"   ├── random_forest.pkl")
+    print(f"   ├── xgboost.pkl")
+    print(f"   └── kmeans.pkl")
+    
+    print("\nPERFORMANCE SUMMARY:")
+    print(f"    Best Risk Classifier: {best_model} ({best_accuracy:.4f})")
+    print(f"    K-Means Silhouette Score: {sil_score:.4f}")
+
+if __name__ == '__main__':
+    main()
