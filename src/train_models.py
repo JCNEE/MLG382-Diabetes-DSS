@@ -54,3 +54,125 @@ def load_data():
         'X_test_scaled': X_test_scaled,
         'target_encoder': target_encoder,
     }
+
+# ==============================================================
+#Risk Classification Models
+# ==============================================================
+
+def train_decision_tree(X_train, X_test, y_train, y_test, target_encoder):
+    """Train and evaluate Decision Tree"""
+    print("\n" + "="*60)
+    print("DECISION TREE CLASSIFIER")
+    print("="*60)
+    
+    # Train the models
+    dt = DecisionTreeClassifier(max_depth=10, random_state=42)
+    dt.fit(X_train, y_train)
+    
+    # Predict
+    y_pred = dt.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    # Results
+    print(f"\nAccuracy: {accuracy:.4f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred, target_names=target_encoder.classes_))
+    
+    # Save model
+    with open(MODELS_DIR / 'decision_tree.pkl', 'wb') as f:
+        pickle.dump(dt, f)
+    print(f"\nModel saved: {MODELS_DIR / 'decision_tree.pkl'}")
+    
+    return dt, accuracy
+
+def train_random_forest(X_train, X_test, y_train, y_test, target_encoder):
+    """Train and evaluate Random Forest"""
+    print("\n" + "="*60)
+    print("RANDOM FOREST CLASSIFIER")
+    print("="*60)
+    
+    # Train
+    rf = RandomForestClassifier(
+        n_estimators=100, 
+        max_depth=15, 
+        random_state=42, 
+        n_jobs=-1
+    )
+    rf.fit(X_train, y_train)
+    
+    # Predict
+    y_pred = rf.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    # Results
+    print(f"\nAccuracy: {accuracy:.4f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred, target_names=target_encoder.classes_))
+    
+    # Feature importance
+    feature_importance = pd.DataFrame({
+        'feature': X_train.columns,
+        'importance': rf.feature_importances_
+    }).sort_values('importance', ascending=False)
+    
+    print("\nTop 10 Most Important Features:")
+    for i, row in feature_importance.head(10).iterrows():
+        print(f"   {i+1}. {row['feature']}: {row['importance']:.4f}")
+    
+    # Save model
+    with open(MODELS_DIR / 'random_forest.pkl', 'wb') as f:
+        pickle.dump(rf, f)
+    print(f"\n Model saved: {MODELS_DIR / 'random_forest.pkl'}")
+    
+    # Save feature importance
+    feature_importance.to_csv(ARTIFACTS_DIR / 'rf_feature_importance.csv', index=False)
+    
+    return rf, accuracy
+
+def train_xgboost(X_train, X_test, y_train, y_test, target_encoder):
+    """Train and evaluate XGBoost"""
+    print("\n" + "="*60)
+    print(" XGBOOST CLASSIFIER")
+    print("="*60)
+    
+    # Train
+    xgb_model = xgb.XGBClassifier(
+        n_estimators=100,
+        max_depth=6,
+        learning_rate=0.1,
+        random_state=42,
+        eval_metric='mlogloss',
+        n_jobs=-1
+    )
+    xgb_model.fit(X_train, y_train)
+    
+    # Predict
+    y_pred = xgb_model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    # Results
+    print(f"\nAccuracy: {accuracy:.4f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred, target_names=target_encoder.classes_))
+    
+    # Feature importance
+    feature_importance = pd.DataFrame({
+        'feature': X_train.columns,
+        'importance': xgb_model.feature_importances_
+    }).sort_values('importance', ascending=False)
+    
+    print("\nTop 10 Most Important Features:")
+    for i, row in feature_importance.head(10).iterrows():
+        print(f"   {i+1}. {row['feature']}: {row['importance']:.4f}")
+    
+    # Save model
+    with open(MODELS_DIR / 'xgboost.pkl', 'wb') as f:
+        pickle.dump(xgb_model, f)
+    print(f"\n Model saved: {MODELS_DIR / 'xgboost.pkl'}")
+    
+    # Save feature importance
+    feature_importance.to_csv(ARTIFACTS_DIR / 'xgb_feature_importance.csv', index=False)
+    
+    return xgb_model, accuracy
+
+
