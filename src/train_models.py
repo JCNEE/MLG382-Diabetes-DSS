@@ -10,20 +10,16 @@ import xgboost as xgb
 import warnings
 warnings.filterwarnings('ignore')
 
-# ==============================================================
-#Setup paths
-# ==============================================================
 
+#Setup paths
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / 'data'
 ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
 MODELS_DIR = ARTIFACTS_DIR / 'models'
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-# ==============================================================
-#Load preprocessed data
-# ==============================================================
 
+#Load preprocessed data
 def load_data():
     """Load all preprocessed data"""
     
@@ -55,10 +51,8 @@ def load_data():
         'target_encoder': target_encoder,
     }
 
-# ==============================================================
-#Risk Classification Models
-# ==============================================================
 
+#Risk Classification Models
 def train_decision_tree(X_train, X_test, y_train, y_test, target_encoder):
     """Train and evaluate Decision Tree"""
     print("\n" + "="*60)
@@ -175,9 +169,10 @@ def train_xgboost(X_train, X_test, y_train, y_test, target_encoder):
     
     return xgb_model, accuracy
 
-# ==============================================================
-# Patient Segmentation - K-Means Clustering
-# ==============================================================
+
+# Patient Segmentation
+# K-Means Clustering
+
 
 def train_kmeans(X_train_scaled, feature_names):
     """Train K-Means clustering with K=3"""
@@ -230,10 +225,8 @@ def compare_models(results):
     
     return best_model, best_accuracy
 
-# ==============================================================
-# Main Execution
-# ==============================================================
 
+# Main Execution
 def main():
     print("="*60)
     print("DIABETES DECISION SUPPORT SYSTEM")
@@ -245,9 +238,9 @@ def main():
     # Load data
     data = load_data()
     
-    # ==========================================================
-    # PART 1: RISK CLASSIFICATION
-    # ==========================================================
+    
+# PART 1: RISK CLASSIFICATION
+    
     print("\n" + "="*60)
     print("PART 1: RISK CLASSIFICATION")
     print("="*60)
@@ -281,9 +274,9 @@ def main():
     # Compare models
     best_model, best_accuracy = compare_models(results)
     
-    # ==========================================================
-    # PART 2: PATIENT SEGMENTATION
-    # ==========================================================
+    
+# PART 2: PATIENT SEGMENTATION
+    
     print("\n" + "="*60)
     print("PART 2: PATIENT SEGMENTATION")
     print("="*60)
@@ -293,9 +286,9 @@ def main():
         data['X_train'].columns.tolist()
     )
     
-    # ==========================================================
+    
     # FINAL SUMMARY
-    # ==========================================================
+   
     print("\n" + "="*60)
     print(" TRAINING COMPLETE!")
     print("="*60)
