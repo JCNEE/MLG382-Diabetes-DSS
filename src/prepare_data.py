@@ -22,7 +22,6 @@ test_data_path = os.path.join(script_dir, "../data/test.csv")
 #==============================================================
 
 def load_and_split(test_size=0.2, random_state=42):
-    from sklearn.model_selection import train_test_split
     raw_data = pd.read_csv(file_path)
     train, test = train_test_split(raw_data, test_size=test_size, random_state=random_state, stratify=raw_data['diabetes_stage'])
     train.to_csv('data/train.csv', index=False)
