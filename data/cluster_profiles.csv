@@ -1,0 +1,4 @@
+cluster,physical_activity_minutes_per_week,diet_score,bmi,glucose_fasting,hba1c,cluster_size
+0,105.49,6.06,24.78,121.52,7.25,22961
+1,134.52,6.28,23.87,101.21,5.9,29436
+2,113.77,5.59,28.38,113.14,6.58,25440
