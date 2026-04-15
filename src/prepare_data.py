@@ -12,6 +12,7 @@ from sklearn.model_selection import train_test_split
 
 os.makedirs("artifacts", exist_ok=True) 
 os.makedirs("data", exist_ok=True)
+os.makedirs("assets", exist_ok=True)
 script_dir = os.path.dirname(os.path.abspath(__file__))
 file_path = os.path.join(script_dir, "../data/Diabetes_and_LifeStyle_Dataset_.csv")
 train_data_path = os.path.join(script_dir, "../data/train.csv")

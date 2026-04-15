@@ -383,6 +383,31 @@ def train_kmeans(X_train_scaled, feature_names):
     return kmeans, cluster_labels, sil_score
 
 
+def save_cluster_profiles(X_train, cluster_labels):
+    """Save cluster-level numeric summaries for dashboard recommendations."""
+    profile_columns = [
+        'physical_activity_minutes_per_week',
+        'diet_score',
+        'bmi',
+        'glucose_fasting',
+        'hba1c',
+    ]
+    available_columns = [column for column in profile_columns if column in X_train.columns]
+    if not available_columns:
+        raise ValueError('No cluster profile columns were found in X_train.')
+
+    cluster_frame = X_train[available_columns].copy()
+    cluster_frame['cluster'] = cluster_labels
+
+    cluster_profiles = cluster_frame.groupby('cluster')[available_columns].mean().round(2)
+    cluster_profiles['cluster_size'] = cluster_frame.groupby('cluster').size()
+
+    cluster_profiles_path = DATA_DIR / 'cluster_profiles.csv'
+    cluster_profiles.reset_index().to_csv(cluster_profiles_path, index=False)
+    print(f"Cluster profiles saved: {cluster_profiles_path}")
+    return cluster_profiles
+
+
 def compare_models(results):
     """
     Compare all three classification models.
@@ -486,6 +511,7 @@ def main():
         data['X_train_scaled'],
         data['X_train'].columns.tolist(),
     )
+    save_cluster_profiles(data['X_train'], cluster_labels)
 
     # ── FINAL SUMMARY ─────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
