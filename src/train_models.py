@@ -119,7 +119,7 @@ def train_random_forest(X_train, X_test, y_train, y_test, target_encoder):
     print(f"\n Model saved: {MODELS_DIR / 'random_forest.pkl'}")
     
     # Save feature importance
-    feature_importance.to_csv(ARTIFACTS_DIR / 'rf_feature_importance.csv', index=False)
+    feature_importance.to_csv(DATA_DIR / 'rf_feature_importance.csv', index=False)
     
     return rf, accuracy
 
@@ -165,7 +165,7 @@ def train_xgboost(X_train, X_test, y_train, y_test, target_encoder):
     print(f"\n Model saved: {MODELS_DIR / 'xgboost.pkl'}")
     
     # Save feature importance
-    feature_importance.to_csv(ARTIFACTS_DIR / 'xgb_feature_importance.csv', index=False)
+    feature_importance.to_csv(DATA_DIR / 'xgb_feature_importance.csv', index=False)
     
     return xgb_model, accuracy
 
@@ -221,7 +221,7 @@ def compare_models(results):
     
     print(f"\n BEST MODEL: {best_model} with {best_accuracy:.4f} accuracy")
     
-    comparison.to_csv(ARTIFACTS_DIR / 'model_comparison.csv', index=False)
+    comparison.to_csv(DATA_DIR / 'model_comparison.csv', index=False)
     
     return best_model, best_accuracy
 

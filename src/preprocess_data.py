@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import pickle
 from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, StandardScaler
 from pathlib import Path
@@ -11,7 +10,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR     = PROJECT_ROOT / 'data'
 ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
-ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 #==============================================================
@@ -33,6 +31,8 @@ NOMINAL_COLS = [
     'ethnicity',
     'employment_status',
     'smoking_status',]
+
+INTERVAL_COLS = []
 
 BINARY_COLS = [
     'family_history_diabetes',
