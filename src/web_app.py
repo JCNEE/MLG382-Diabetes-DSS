@@ -23,23 +23,9 @@ MODELS_DIR = ARTIFACTS_DIR / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 
-MODEL_FILES = {
-    "decision_tree": "decision_tree.pkl",
-    "random_forest": "random_forest.pkl",
-    "xgboost": "xgboost.pkl",
-}
-
-MODEL_LABELS = {
-    "decision_tree": "Decision Tree",
-    "random_forest": "Random Forest",
-    "xgboost": "XGBoost",
-}
-
-MODEL_ASSET_PREFIX = {
-    "decision_tree": "DecisionTree",
-    "random_forest": "RandomForest",
-    "xgboost": "XGBoost",
-}
+PREDICTION_MODEL_FILE = MODELS_DIR / "xgboost.pkl"
+MODEL_LABEL = "XGBoost"
+MODEL_ASSET_PREFIX = "XGBoost"
 
 FEATURE_LABELS = {
     "Age": "Age",
@@ -50,11 +36,6 @@ FEATURE_LABELS = {
     "hdl_cholesterol": "HDL Cholesterol",
     "ldl_cholesterol": "LDL Cholesterol",
 }
-
-MODEL_OPTIONS = [
-    {"label": MODEL_LABELS[key], "value": key}
-    for key in ("xgboost", "random_forest", "decision_tree")
-]
 
 PRIMARY_FEATURE_COUNT = 10
 PRIMARY_FEATURE_FALLBACK = [
@@ -76,21 +57,15 @@ def load_pickle(path: Path):
         return pickle.load(file_obj)
 
 
-def load_prediction_models():
-    loaded_models = {}
-    for model_key, filename in MODEL_FILES.items():
-        model_path = MODELS_DIR / filename
-        if model_path.exists():
-            loaded_models[model_key] = load_pickle(model_path)
-    if not loaded_models:
+def load_prediction_model():
+    if not PREDICTION_MODEL_FILE.exists():
         raise FileNotFoundError(
-            "No trained prediction models were found. Run src/train_models2.py first."
+            "Missing XGBoost model. Run src/train_models.py first."
         )
-    return loaded_models
+    return load_pickle(PREDICTION_MODEL_FILE)
 
 
-PREDICTION_MODELS = load_prediction_models()
-DEFAULT_MODEL_KEY = "xgboost" if "xgboost" in PREDICTION_MODELS else next(iter(PREDICTION_MODELS))
+PREDICTION_MODEL = load_prediction_model()
 
 target_encoder = load_pickle(ARTIFACTS_DIR / "target_encoder.pkl")
 feature_encoders = load_pickle(ARTIFACTS_DIR / "feature_encoders.pkl")
@@ -108,7 +83,7 @@ for column in train_feature_cols:
         train_fill_values[column] = float(X_train[column].mode().iloc[0])
 
 shap_background = X_train.sample(min(500, len(X_train)), random_state=42).copy()
-shap_explainers = {}
+shap_explainer = None
 cluster_baselines = X_train[
     [
         "physical_activity_minutes_per_week",
@@ -348,13 +323,14 @@ def resolve_base_value(base_values: np.ndarray, sample_index: int, class_index: 
     raise ValueError(f"Unsupported base value shape: {base_values.shape}")
 
 
-def get_shap_explainer(model_key: str):
-    if model_key not in shap_explainers:
-        shap_explainers[model_key] = shap.TreeExplainer(
-            PREDICTION_MODELS[model_key],
+def get_shap_explainer():
+    global shap_explainer
+    if shap_explainer is None:
+        shap_explainer = shap.TreeExplainer(
+            PREDICTION_MODEL,
             data=shap_background,
         )
-    return shap_explainers[model_key]
+    return shap_explainer
 
 
 def build_probability_figure(probabilities: np.ndarray, predicted_class: str) -> go.Figure:
@@ -391,12 +367,12 @@ def build_probability_figure(probabilities: np.ndarray, predicted_class: str) ->
     return figure
 
 
-def build_local_shap_outputs(model_key: str, patient_raw: pd.DataFrame, patient_encoded: pd.DataFrame):
-    model = PREDICTION_MODELS[model_key]
+def build_local_shap_outputs(patient_raw: pd.DataFrame, patient_encoded: pd.DataFrame):
+    model = PREDICTION_MODEL
     predicted_index = int(model.predict(patient_encoded)[0])
     predicted_class = target_encoder.inverse_transform([predicted_index])[0]
 
-    explainer = get_shap_explainer(model_key)
+    explainer = get_shap_explainer()
     shap_values, base_values = compute_shap_values(explainer, patient_encoded)
 
     if shap_values.ndim == 3:
@@ -514,7 +490,7 @@ cluster_profiles = load_or_build_cluster_profiles()
 def build_recommendations(cluster_id: int):
     if cluster_profiles is None or cluster_id not in cluster_profiles.index:
         return dbc.Alert(
-            "Cluster profiles are not available yet. Re-run src/train_models2.py to generate them.",
+            "Cluster profiles are not available yet. Re-run src/train_models.py to generate them.",
             color="warning",
         )
 
@@ -549,13 +525,15 @@ def build_recommendations(cluster_id: int):
     )
 
 
-def build_global_shap_children(model_key: str):
-    asset_prefix = MODEL_ASSET_PREFIX[model_key]
-    summary_file = ASSETS_DIR / f"{asset_prefix}_shap_summary.png"
-    bar_file = ASSETS_DIR / f"{asset_prefix}_shap_bar.png"
+def build_global_shap_children():
+    summary_file = ASSETS_DIR / f"{MODEL_ASSET_PREFIX}_shap_summary.png"
+    bar_file = ASSETS_DIR / f"{MODEL_ASSET_PREFIX}_shap_bar.png"
 
     if not summary_file.exists() or not bar_file.exists():
-        return html.Div()
+        return dbc.Alert(
+            "XGBoost SHAP assets are missing. Run src/shap_analysis.py to generate them.",
+            color="warning",
+        )
 
     return dbc.Row(
         [
@@ -619,13 +597,10 @@ app.layout = dbc.Container(
                                 dbc.Card(
                                     dbc.CardBody(
                                         [
-                                            html.H4("Prediction Settings", className="card-title"),
-                                            html.Label("Classification Model", className="fw-semibold mb-2"),
-                                            dcc.Dropdown(
-                                                id="model-select",
-                                                options=[option for option in MODEL_OPTIONS if option["value"] in PREDICTION_MODELS],
-                                                value=DEFAULT_MODEL_KEY,
-                                                clearable=False,
+                                            html.H4("Prediction Model", className="card-title"),
+                                            html.P(
+                                                "All diabetes-stage predictions and SHAP explanations in this app use the saved XGBoost classifier.",
+                                                className="mb-0",
                                             ),
                                         ]
                                     ),
@@ -677,10 +652,10 @@ app.layout = dbc.Container(
                         html.Div(className="mb-3"),
                         html.H4("Model Driver Analysis"),
                         html.P(
-                            "Global plots come from src/shap_analysis.py. The local chart updates from the most recent patient prediction.",
+                            "Global XGBoost plots come from src/shap_analysis.py. The local chart updates from the most recent patient prediction.",
                             className="text-muted mb-4",
                         ),
-                        html.Div(id="global-shap-output", className="mb-4"),
+                        html.Div(build_global_shap_children(), id="global-shap-output", className="mb-4"),
                         html.Div(id="local-shap-summary", className="mb-4"),
                         dcc.Graph(
                             id="local-shap-figure",
@@ -702,27 +677,15 @@ app.layout = dbc.Container(
     fluid=True,
     className="py-4",
 )
-
-
-@app.callback(
-    Output("global-shap-output", "children"),
-    Input("model-select", "value"),
-)
-def update_global_shap_panel(model_key):
-    selected_model = model_key or DEFAULT_MODEL_KEY
-    return build_global_shap_children(selected_model)
-
-
 @app.callback(
     Output("prediction-output", "children"),
     Output("probability-figure", "figure"),
     Output("local-shap-summary", "children"),
     Output("local-shap-figure", "figure"),
     Input("predict-btn", "n_clicks"),
-    State("model-select", "value"),
     [State(f"input-{column}", "value") for column in FEATURE_COLS],
 )
-def predict_risk(n_clicks, model_key, *values):
+def predict_risk(n_clicks, *values):
     if not n_clicks:
         return (
             "",
@@ -731,13 +694,12 @@ def predict_risk(n_clicks, model_key, *values):
             build_empty_figure("Submit a risk prediction to see local SHAP drivers."),
         )
 
-    selected_model = model_key or DEFAULT_MODEL_KEY
     raw_inputs = dict(zip(FEATURE_COLS, values))
     patient_raw, patient_encoded, _, missing_columns = prepare_patient_features(raw_inputs)
     missing_primary = [column for column in missing_columns if column in PRIMARY_FEATURES]
     missing_secondary = [column for column in missing_columns if column in SECONDARY_FEATURES]
 
-    model = PREDICTION_MODELS[selected_model]
+    model = PREDICTION_MODEL
     predicted_index = int(model.predict(patient_encoded)[0])
     predicted_class = target_encoder.inverse_transform([predicted_index])[0]
 
@@ -749,7 +711,7 @@ def predict_risk(n_clicks, model_key, *values):
         dbc.CardBody(
             [
                 html.H4(f"Predicted Diabetes Stage: {predicted_class}", className="card-title"),
-                html.P(f"Model used: {MODEL_LABELS[selected_model]}"),
+                html.P(f"Model used: {MODEL_LABEL}"),
                 html.P(f"Prediction confidence: {confidence * 100:.1f}%"),
                 html.P(
                     f"Blank primary fields auto-filled from baseline: {len(missing_primary)} ({format_feature_list(missing_primary)})",
@@ -765,7 +727,7 @@ def predict_risk(n_clicks, model_key, *values):
     )
 
     probability_figure = build_probability_figure(aligned_probabilities, predicted_class)
-    _, shap_summary, shap_figure = build_local_shap_outputs(selected_model, patient_raw, patient_encoded)
+    _, shap_summary, shap_figure = build_local_shap_outputs(patient_raw, patient_encoded)
 
     return prediction_card, probability_figure, shap_summary, shap_figure
 

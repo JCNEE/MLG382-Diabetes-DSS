@@ -313,20 +313,18 @@ def train_xgboost(X_train, X_test, y_train, y_test, target_encoder):
     print("=" * 60)
 
     xgb_model = xgb.XGBClassifier(
-        n_estimators=300,          # FIX: more rounds improve minority-class recall
+        n_estimators=300,          
         max_depth=6,
-        learning_rate=0.05,        # FIX: lower LR + more trees generalises better
-        subsample=0.8,             # FIX: row subsampling reduces overfitting on 90k rows
-        colsample_bytree=0.8,      # FIX: feature subsampling (≈22 of 28 cols per tree)
-        min_child_weight=5,        # FIX: prevents splits on very small minority groups
+        learning_rate=0.05,        
+        subsample=0.8,             
+        colsample_bytree=0.8,      
+        min_child_weight=5,        
         random_state=42,
         eval_metric='mlogloss',
         n_jobs=-1,
     )
 
-    # SMOTE already balanced the classes, so no sample_weight is needed here.
-    # Adding class_weight='balanced' on top of SMOTE would double-penalise the
-    # majority class and distort precision for all classes.
+
     xgb_model.fit(X_train, y_train)
 
     metrics = evaluate_classifier(
@@ -334,7 +332,7 @@ def train_xgboost(X_train, X_test, y_train, y_test, target_encoder):
         X_train, y_train,
     )
 
-    # FIX: use enumerate — same bug fix as Random Forest above
+
     feature_importance = pd.DataFrame({
         'feature':    X_train.columns,
         'importance': xgb_model.feature_importances_,

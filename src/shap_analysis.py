@@ -1,15 +1,3 @@
-"""Generate SHAP outputs for the trained diabetes risk models.
-
-Pipeline prerequisite:
-1. src/prepare_data.py
-2. src/preprocess_data.py
-3. src/train_models2.py
-
-By default this script analyses the saved Random Forest model so the output
-filenames match the current Dash app's SHAP tab. Pass --model xgboost if you
-want SHAP outputs for the best-performing classifier from train_models2.py.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -48,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         choices=sorted(MODEL_FILES),
-        default="random_forest",
+        default="xgboost",
         help="Trained model to explain.",
     )
     parser.add_argument(
@@ -105,7 +93,7 @@ def require_file(path: Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(
             f"Missing required file: {path}. Run prepare_data.py, "
-            "preprocess_data.py, and train_models2.py first."
+            "preprocess_data.py, and train_models.py first."
         )
     return path
 
