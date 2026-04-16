@@ -1,6 +1,8 @@
+import importlib.util
 import os
 from pathlib import Path
 import pickle
+from typing import Any, Protocol, cast
 
 import dash
 import dash_bootstrap_components as dbc
@@ -22,6 +24,42 @@ ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 MODELS_DIR = ARTIFACTS_DIR / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 ASSETS_DIR = PROJECT_ROOT / "assets"
+APP_DESIGN_DIR = PROJECT_ROOT / "app design"
+WEB_DESIGN_FILE = APP_DESIGN_DIR / "web_design.py"
+
+
+class WebDesignModule(Protocol):
+    def build_index_string(self, css_text: str) -> str: ...
+    def build_input_card(self, label: str, helper_text: str, control: Any): ...
+    def build_layout(
+        self,
+        *,
+        primary_inputs: Any,
+        secondary_inputs: Any,
+        global_shap_children: Any,
+        model_label: str,
+        feature_count: int,
+        training_rows: int,
+        probability_figure: Any,
+        local_shap_figure: Any,
+    ): ...
+    def load_theme_css(self) -> str: ...
+
+
+def load_web_design_module() -> WebDesignModule:
+    spec = importlib.util.spec_from_file_location("web_design", WEB_DESIGN_FILE)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load web_design module from {WEB_DESIGN_FILE}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return cast(WebDesignModule, module)
+
+
+web_design = load_web_design_module()
+build_index_string = web_design.build_index_string
+build_input_card = web_design.build_input_card
+build_layout = web_design.build_layout
+load_theme_css = web_design.load_theme_css
 
 PREDICTION_MODEL_FILE = MODELS_DIR / "xgboost.pkl"
 MODEL_LABEL = "XGBoost"
@@ -172,10 +210,9 @@ def get_fallback_text(column: str) -> str:
 
 def build_empty_figure(message: str) -> go.Figure:
     figure = go.Figure()
+    figure = apply_chart_theme(figure, height=320)
     figure.update_layout(
-        template="plotly_white",
-        height=320,
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin=dict(l=20, r=20, t=20, b=20),
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
         annotations=[
@@ -186,10 +223,25 @@ def build_empty_figure(message: str) -> go.Figure:
                 "x": 0.5,
                 "y": 0.5,
                 "showarrow": False,
-                "font": {"size": 14},
+                "font": {"size": 14, "color": "#5f7268"},
             }
         ],
     )
+    return figure
+
+
+def apply_chart_theme(figure: go.Figure, height: int) -> go.Figure:
+    figure.update_layout(
+        template="plotly_white",
+        height=height,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"family": "Manrope, sans-serif", "color": "#183128"},
+        margin=dict(l=20, r=20, t=32, b=20),
+        legend=dict(bgcolor="rgba(0,0,0,0)", title_text=""),
+    )
+    figure.update_xaxes(gridcolor="rgba(24, 49, 40, 0.08)", zerolinecolor="rgba(24, 49, 40, 0.08)")
+    figure.update_yaxes(gridcolor="rgba(24, 49, 40, 0.08)", zerolinecolor="rgba(24, 49, 40, 0.08)")
     return figure
 
 
@@ -217,6 +269,7 @@ def build_input_field(column: str):
             options=options,
             placeholder=f"Select {label}",
             clearable=True,
+            className="wellness-dropdown",
         )
     else:
         control = dcc.Input(
@@ -224,21 +277,9 @@ def build_input_field(column: str):
             type="number",
             step=get_numeric_step(column),
             placeholder=f"Enter {label}",
-            style={"width": "100%"},
+            className="wellness-control",
         )
-    return dbc.Col(
-        dbc.Card(
-            dbc.CardBody([
-                html.Label(label, className="fw-semibold mb-2"),
-                control,
-                html.Small(helper_text, className="text-muted d-block mt-2"),
-            ]),
-            className="h-100 shadow-sm",
-        ),
-        md=6,
-        lg=4,
-        className="mb-3",
-    )
+    return build_input_card(label=label, helper_text=helper_text, control=control)
 
 
 def ordinal_category_maps():
@@ -353,17 +394,12 @@ def build_probability_figure(probabilities: np.ndarray, predicted_class: str) ->
         y="Probability",
         color="Type",
         text="ProbabilityLabel",
-        color_discrete_map={"Predicted": "#0c7c59", "Other": "#9ec5ab"},
+        color_discrete_map={"Predicted": "#2f8f68", "Other": "#cbdcd0"},
     )
-    figure.update_layout(
-        template="plotly_white",
-        height=320,
-        showlegend=False,
-        margin=dict(l=20, r=20, t=40, b=20),
-        yaxis_title="Probability",
-        xaxis_title="Diabetes Stage",
-    )
-    figure.update_traces(textposition="outside")
+    figure = apply_chart_theme(figure, height=320)
+    figure.update_layout(showlegend=False, yaxis_title="Probability", xaxis_title="Diabetes Stage")
+    figure.update_yaxes(tickformat=".0%")
+    figure.update_traces(textposition="outside", marker_line_width=0)
     return figure
 
 
@@ -415,18 +451,12 @@ def build_local_shap_outputs(patient_raw: pd.DataFrame, patient_encoded: pd.Data
             "shap_value": ":.4f",
         },
         color_discrete_map={
-            "Pushes higher": "#c0392b",
-            "Pushes lower": "#2471a3",
+            "Pushes higher": "#c9774c",
+            "Pushes lower": "#2f7a72",
         },
     )
-    figure.update_layout(
-        template="plotly_white",
-        height=420,
-        margin=dict(l=20, r=20, t=40, b=20),
-        xaxis_title="SHAP value",
-        yaxis_title="Feature",
-        legend_title_text="Effect",
-    )
+    figure = apply_chart_theme(figure, height=420)
+    figure.update_layout(xaxis_title="SHAP value", yaxis_title="Feature", legend_title_text="Effect")
     figure.update_traces(texttemplate="%{x:.3f}", textposition="outside")
 
     top_list = []
@@ -450,7 +480,7 @@ def build_local_shap_outputs(patient_raw: pd.DataFrame, patient_encoded: pd.Data
                 html.Ul(top_list, className="mb-0"),
             ]
         ),
-        className="shadow-sm",
+        className="analysis-card h-100",
     )
     return predicted_class, summary, figure
 
@@ -492,6 +522,7 @@ def build_recommendations(cluster_id: int):
         return dbc.Alert(
             "Cluster profiles are not available yet. Re-run src/train_models.py to generate them.",
             color="warning",
+            className="analysis-alert",
         )
 
     profile = cluster_profiles.loc[cluster_id]
@@ -521,7 +552,7 @@ def build_recommendations(cluster_id: int):
                 html.Ul([html.Li(text) for text in recommendation_lines], className="mb-0"),
             ]
         ),
-        className="shadow-sm",
+        className="analysis-card",
     )
 
 
@@ -533,6 +564,7 @@ def build_global_shap_children():
         return dbc.Alert(
             "XGBoost SHAP assets are missing. Run src/shap_analysis.py to generate them.",
             color="warning",
+            className="analysis-alert",
         )
 
     return dbc.Row(
@@ -542,10 +574,10 @@ def build_global_shap_children():
                     dbc.CardBody(
                         [
                             html.H6("Global SHAP Summary", className="card-title"),
-                            html.Img(src=app.get_asset_url(summary_file.name), style={"width": "100%"}),
+                            html.Img(src=app.get_asset_url(summary_file.name), className="insight-image"),
                         ]
                     ),
-                    className="shadow-sm",
+                    className="analysis-card figure-surface h-100",
                 ),
                 lg=6,
                 className="mb-3",
@@ -555,10 +587,10 @@ def build_global_shap_children():
                     dbc.CardBody(
                         [
                             html.H6("Global Feature Importance", className="card-title"),
-                            html.Img(src=app.get_asset_url(bar_file.name), style={"width": "100%"}),
+                            html.Img(src=app.get_asset_url(bar_file.name), className="insight-image"),
                         ]
                     ),
-                    className="shadow-sm",
+                    className="analysis-card figure-surface h-100",
                 ),
                 lg=6,
                 className="mb-3",
@@ -572,110 +604,19 @@ app = dash.Dash(
     external_stylesheets=[dbc.themes.BOOTSTRAP],
     assets_folder=str(ASSETS_DIR),
 )
+app.index_string = build_index_string(load_theme_css())
+app.title = "Diabetes Risk Decision Support System"
 server = app.server
 
-app.layout = dbc.Container(
-    [
-        dbc.Row(
-            dbc.Col(
-                [
-                    html.H2("Diabetes Risk Decision Support System", className="mb-2"),
-                    html.P(
-                        "Prediction, clustering, and SHAP explanations now share the same patient-preprocessing path.",
-                        className="text-muted mb-4",
-                    ),
-                ]
-            )
-        ),
-        dcc.Tabs(
-            [
-                dcc.Tab(
-                    label="Risk Prediction",
-                    children=[
-                        dbc.Row(
-                            dbc.Col(
-                                dbc.Card(
-                                    dbc.CardBody(
-                                        [
-                                            html.H4("Prediction Model", className="card-title"),
-                                            html.P(
-                                                "All diabetes-stage predictions and SHAP explanations in this app use the saved XGBoost classifier.",
-                                                className="mb-0",
-                                            ),
-                                        ]
-                                    ),
-                                    className="shadow-sm mb-4",
-                                )
-                            )
-                        ),
-                        html.H4("Primary Inputs", className="mb-3"),
-                        html.P(
-                            "Any blank field, including the main ones below, will automatically use the baseline shown under that input.",
-                            className="text-muted mb-3",
-                        ),
-                        dbc.Row([build_input_field(column) for column in PRIMARY_FEATURES]),
-                        dbc.Accordion(
-                            [
-                                dbc.AccordionItem(
-                                    [
-                                        html.P(
-                                            "These lower-impact fields are optional. Leave them blank to use the baseline shown below each field.",
-                                            className="text-muted mb-3",
-                                        ),
-                                        dbc.Row([build_input_field(column) for column in SECONDARY_FEATURES]),
-                                    ],
-                                    title="Optional Advanced Inputs",
-                                )
-                            ],
-                            start_collapsed=True,
-                            className="mb-4",
-                        ),
-                        dbc.Button("Predict Risk", id="predict-btn", color="primary", className="mb-4"),
-                        html.Div(id="prediction-output", className="mb-4"),
-                        dcc.Graph(
-                            id="probability-figure",
-                            figure=build_empty_figure("Run a prediction to see class probabilities."),
-                        ),
-                    ],
-                ),
-                dcc.Tab(
-                    label="Patient Segmentation",
-                    children=[
-                        html.Div(className="mb-3"),
-                        dbc.Button("Assign Cluster", id="cluster-btn", color="secondary", className="mb-4"),
-                        html.Div(id="cluster-output", className="mb-4"),
-                    ],
-                ),
-                dcc.Tab(
-                    label="SHAP Insights",
-                    children=[
-                        html.Div(className="mb-3"),
-                        html.H4("Model Driver Analysis"),
-                        html.P(
-                            "Global XGBoost plots come from src/shap_analysis.py. The local chart updates from the most recent patient prediction.",
-                            className="text-muted mb-4",
-                        ),
-                        html.Div(build_global_shap_children(), id="global-shap-output", className="mb-4"),
-                        html.Div(id="local-shap-summary", className="mb-4"),
-                        dcc.Graph(
-                            id="local-shap-figure",
-                            figure=build_empty_figure("Submit a risk prediction to see local SHAP drivers."),
-                        ),
-                    ],
-                ),
-                dcc.Tab(
-                    label="Recommendations",
-                    children=[
-                        html.Div(className="mb-3"),
-                        html.H4("Lifestyle Recommendations"),
-                        html.Div(id="recommendations-output"),
-                    ],
-                ),
-            ]
-        ),
-    ],
-    fluid=True,
-    className="py-4",
+app.layout = build_layout(
+    primary_inputs=[build_input_field(column) for column in PRIMARY_FEATURES],
+    secondary_inputs=[build_input_field(column) for column in SECONDARY_FEATURES],
+    global_shap_children=build_global_shap_children(),
+    model_label=MODEL_LABEL,
+    feature_count=len(FEATURE_COLS),
+    training_rows=len(X_train),
+    probability_figure=build_empty_figure("Run a prediction to see class probabilities."),
+    local_shap_figure=build_empty_figure("Submit a risk prediction to see local SHAP drivers."),
 )
 @app.callback(
     Output("prediction-output", "children"),
@@ -723,7 +664,7 @@ def predict_risk(n_clicks, *values):
                 ),
             ]
         ),
-        className="shadow-sm",
+        className="analysis-card analysis-card--accent",
     )
 
     probability_figure = build_probability_figure(aligned_probabilities, predicted_class)
@@ -762,7 +703,7 @@ def assign_cluster(n_clicks, *values):
                 ),
             ]
         ),
-        className="shadow-sm",
+        className="analysis-card",
     )
 
     recommendations = build_recommendations(cluster_id)
