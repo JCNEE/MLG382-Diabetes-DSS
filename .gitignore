@@ -44,16 +44,13 @@ pip-wheel-metadata/
 *.sqlite3
 
 # Generated models and experiment outputs
-artifacts/
+
 mlruns/
 wandb/
 *.joblib
-*.pkl
-*.pickle
 *.sav
 *.onnx
 *.h5
-assets/
 
 # Editor and OS files
 .vscode/
