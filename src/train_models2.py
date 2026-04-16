@@ -270,9 +270,9 @@ def train_random_forest(X_train, X_test, y_train, y_test, target_encoder):
     print("=" * 60)
 
     rf = RandomForestClassifier(
-        n_estimators=200,         # FIX: more trees = more stable predictions for minority classes
+        n_estimators=150,         # FIX: more trees = more stable predictions for minority classes
         max_depth=15,
-        min_samples_leaf=10,      # FIX: prevents leaf nodes that only contain SMOTE samples
+        min_samples_leaf=20,      # FIX: prevents leaf nodes that only contain SMOTE samples
         max_features='sqrt',      # good default for 28 features (≈ 5 features per split)
         random_state=42,
         n_jobs=-1,
