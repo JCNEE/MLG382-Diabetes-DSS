@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import pickle
 
@@ -593,6 +594,7 @@ app = dash.Dash(
     external_stylesheets=[dbc.themes.BOOTSTRAP],
     assets_folder=str(ASSETS_DIR),
 )
+server = app.server
 
 app.layout = dbc.Container(
     [
@@ -806,4 +808,8 @@ def assign_cluster(n_clicks, *values):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8050)),
+        debug=False,
+    )
