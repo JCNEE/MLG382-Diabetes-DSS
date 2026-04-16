@@ -15,10 +15,8 @@ from sklearn.metrics import (
     roc_auc_score,
     silhouette_score,
     confusion_matrix,
-    ConfusionMatrixDisplay,
     matthews_corrcoef,            
 )
-import matplotlib.pyplot as plt
 from sklearn.model_selection import StratifiedKFold, cross_validate   
 import xgboost as xgb
 import warnings
@@ -172,20 +170,6 @@ def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
         ARTIFACTS_DIR / f"{model_name.lower().replace(' ', '_')}_confusion_matrix.csv"
     )
     confusion_df.to_csv(confusion_path)
-
-     # ── Displaying and Saving Confusion Matrix───────────────────────────────────
-    disp = ConfusionMatrixDisplay(
-          confusion_matrix = confusion,
-          display_labels = target_encoder.classes_
-          )
-    disp.plot(cmap = 'Blues', colorbar = True)
-    plt.title(f"Confusion Matrix: {model_name}")
-    plt.savefig(
-        ARTIFACTS_DIR / f"{model_name.lower().replace(' ', '_')}_confusion_matrix.png",
-        dpi = 150, 
-        bbox_inches = 'tight',
-        )
-    plt.show()
 
 
     # ── Print results ─────────────────────────────────────────────────────────
