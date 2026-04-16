@@ -39,7 +39,11 @@ MODELS_DIR = ARTIFACTS_DIR / 'models'
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 PRIMARY_CLASSIFICATION_METRIC = 'Macro F1'
 
-
+#==============================================================
+# The following function loads the preprocessed training and 
+# testing data, along with the target encoder, and prints 
+# their shapes and class distribution.
+#==============================================================
 def load_data():
     """Load all preprocessed data."""
     X_train = pd.read_csv(DATA_DIR / 'X_train.csv')
@@ -80,7 +84,9 @@ def print_class_distribution(y_values, target_encoder, heading):
         percentage = (count / total * 100) if total else 0
         print(f"   {class_name}: {count:,} ({percentage:.1f}%)")
 
-
+#====================================
+# encoding the features for modeling
+#====================================
 def balance_training_data(X_train, y_train, target_encoder):
 
     print("\n" + "=" * 60)
@@ -123,7 +129,10 @@ def balance_training_data(X_train, y_train, target_encoder):
     print_class_distribution(y_balanced, target_encoder, "Resampled class distribution:")
     return X_balanced, y_balanced
 
-
+#==============================================================
+# The following line defines the list of feature columns by 
+# combining numeric, binary, ordinal, and nominal columns.
+#==============================================================
 def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
                          X_train_balanced=None, y_train_balanced=None):
     
@@ -133,6 +142,7 @@ def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
         model.predict_proba(X_test), columns=model.classes_
     )
     y_proba = proba_frame.reindex(columns=class_labels, fill_value=0.0).to_numpy()
+
 
     # ── Core metrics ──────────────────────────────────────────────────────────
     accuracy           = accuracy_score(y_test, y_pred)
@@ -248,9 +258,9 @@ def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
 
     return metrics
 
-
-# ── Risk Classification Models ────────────────────────────────────────────────
-
+#============================
+# Risk Classification Models
+#============================
 def train_decision_tree(X_train, X_test, y_train, y_test, target_encoder):
     """Train and evaluate Decision Tree."""
     print("\n" + "=" * 60)
@@ -367,8 +377,9 @@ def train_xgboost(X_train, X_test, y_train, y_test, target_encoder):
     return xgb_model, metrics
 
 
-# ── Patient Segmentation ──────────────────────────────────────────────────────
-
+#======================
+# Patient Segmentation
+#======================
 def train_kmeans(X_train_scaled, feature_names):
     """Train K-Means clustering with K=3."""
     print("\n" + "=" * 60)
@@ -397,7 +408,11 @@ def train_kmeans(X_train_scaled, feature_names):
     )
     return kmeans, cluster_labels, sil_score
 
-
+#==============================================================
+# The following function encodes the features for modeling using 
+# OrdinalEncoder for ordinal features and LabelEncoder for nominal 
+# features, and saves the encoders for future use.
+#==============================================================
 def save_cluster_profiles(X_train, cluster_labels):
     """Save cluster-level numeric summaries for dashboard recommendations."""
     profile_columns = [
@@ -422,7 +437,10 @@ def save_cluster_profiles(X_train, cluster_labels):
     print(f"Cluster profiles saved: {cluster_profiles_path}")
     return cluster_profiles
 
-
+#==============================================================
+# The following function compares the performance of the trained 
+# classification models and saves a summary table of their metrics.
+#==============================================================
 def compare_models(results):
     """
     Compare all three classification models.
@@ -468,8 +486,9 @@ def compare_models(results):
     return best_model, best_metric_value, best_accuracy, best_bal_accuracy
 
 
-# ── Main Execution ────────────────────────────────────────────────────────────
-
+#===================
+# Main pipeline
+#==================
 def main():
     print("=" * 60)
     print("DIABETES DECISION SUPPORT SYSTEM")

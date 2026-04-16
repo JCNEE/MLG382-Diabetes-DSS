@@ -101,7 +101,6 @@ def encode_target(train: pd.DataFrame, test: pd.DataFrame):
     return y_train, y_test, le
     
 #encode categorical data
-
 def encode_categorical(train: pd.DataFrame, test: pd.DataFrame):
 
     X_train = train[FEATURE_COLS].copy()

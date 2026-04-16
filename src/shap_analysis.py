@@ -28,7 +28,12 @@ MODEL_LABELS = {
     "xgboost": "XGBoost",
 }
 
-
+#==============================================================
+# The following function parses command-line arguments for the 
+# SHAP analysis script, allowing users to specify the model, 
+# background and evaluation sizes, output directories, 
+# and other options.
+#==============================================================
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run SHAP analysis on a trained diabetes risk model.",
@@ -108,7 +113,10 @@ def sample_frame(frame: pd.DataFrame, sample_size: int, random_state: int) -> pd
         return frame.copy()
     return frame.sample(n=sample_size, random_state=random_state).copy()
 
-
+#==============================================================
+# The following function loads the trained model, target encoder, 
+# and training/testing data for the specified model name.
+#==============================================================
 def load_pipeline_outputs(model_name: str):
     model = load_pickle(require_file(MODELS_DIR / MODEL_FILES[model_name]))
     target_encoder = load_pickle(require_file(ARTIFACTS_DIR / "target_encoder.pkl"))
@@ -116,7 +124,10 @@ def load_pipeline_outputs(model_name: str):
     X_test = pd.read_csv(require_file(DATA_DIR / "X_test.csv"))
     return model, target_encoder, X_train, X_test
 
-
+#==============================================================
+# The following function computes SHAP values for a given 
+# explainer and evaluation set.
+#==============================================================
 def compute_shap_values(explainer: shap.TreeExplainer, X_eval: pd.DataFrame):
     try:
         explanation = explainer(X_eval, check_additivity=False)
@@ -135,7 +146,10 @@ def compute_shap_values(explainer: shap.TreeExplainer, X_eval: pd.DataFrame):
 
     return values, base_values
 
-
+#==============================================================
+# The following function projects SHAP values to the predicted 
+# class for each sample, handling both 2D and 3D input shapes.
+#==============================================================
 def predicted_class_matrix(values: np.ndarray, predictions: np.ndarray) -> np.ndarray:
     if values.ndim == 2:
         return values
@@ -145,7 +159,11 @@ def predicted_class_matrix(values: np.ndarray, predictions: np.ndarray) -> np.nd
         projected[row_index] = values[row_index, :, class_index]
     return projected
 
-
+#==============================================================
+# The following function builds a DataFrame of feature importance 
+# based on mean absolute SHAP values, 
+# both for the predicted class and across all classes if applicable.
+#==============================================================
 def build_feature_importance(
     values: np.ndarray,
     projected_values: np.ndarray,
@@ -171,7 +189,11 @@ def build_feature_importance(
         ascending=False,
     )
 
-
+#==============================================================
+# The following function resolves the appropriate base value for 
+# a given sample and class index, handling different possible 
+# shapes of the base_values array.
+#==============================================================
 def resolve_base_value(base_values: np.ndarray, sample_index: int, class_index: int) -> float:
     if np.isscalar(base_values):
         return float(base_values)
@@ -189,7 +211,10 @@ def resolve_base_value(base_values: np.ndarray, sample_index: int, class_index: 
 
     raise ValueError(f"Unsupported base value shape: {base_values.shape}")
 
-
+#==============================================================
+# The following function generates a SHAP summary plot for the 
+# predicted class.
+#==============================================================
 def save_summary_plot(
     projected_values: np.ndarray,
     X_eval: pd.DataFrame,
@@ -210,7 +235,10 @@ def save_summary_plot(
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
 
-
+#==============================================================
+# The following function generates a bar plot of mean absolute 
+# SHAP values for the predicted class.
+#==============================================================
 def save_bar_plot(
     importance_df: pd.DataFrame,
     model_label: str,
@@ -231,7 +259,10 @@ def save_bar_plot(
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
 
-
+#==============================================================
+# The following function generates a local SHAP waterfall 
+# plot for a specific sample index.
+#==============================================================
 def save_waterfall_plot(
     values: np.ndarray,
     base_values: np.ndarray,
@@ -273,7 +304,9 @@ def save_waterfall_plot(
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
 
-
+#==============================================================
+# Main function to run the SHAP analysis and generate plots and CSV
+#==============================================================
 def main() -> int:
     args = parse_args()
 
@@ -346,6 +379,6 @@ def main() -> int:
 
     return 0
 
-
+# This allows the script to be run directly, and will execute the main function.
 if __name__ == "__main__":
     raise SystemExit(main())
