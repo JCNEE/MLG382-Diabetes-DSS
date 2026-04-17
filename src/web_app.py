@@ -88,6 +88,7 @@ PRIMARY_FEATURE_FALLBACK = [
     "family_history_diabetes",
     "hdl_cholesterol",
 ]
+GLOBAL_IMPORTANCE_MAX_FEATURES = 12
 
 
 def load_pickle(path: Path):
@@ -133,11 +134,54 @@ cluster_baselines = X_train[
 ].median().to_dict()
 
 
-def load_primary_features():
+def load_global_shap_importance():
     shap_path = DATA_DIR / "xgboost_shap_feature_importance.csv"
-    if shap_path.exists():
-        shap_frame = pd.read_csv(shap_path)
-        ranked = [feature for feature in shap_frame["feature"].tolist() if feature in FEATURE_COLS]
+    if not shap_path.exists():
+        return None
+
+    shap_frame = pd.read_csv(shap_path)
+    if "feature" not in shap_frame.columns:
+        return None
+
+    return shap_frame
+
+
+GLOBAL_SHAP_IMPORTANCE = load_global_shap_importance()
+
+
+def build_global_importance_options():
+    if GLOBAL_SHAP_IMPORTANCE is None:
+        return []
+
+    options = []
+    if "mean_abs_shap_all_classes" in GLOBAL_SHAP_IMPORTANCE.columns:
+        options.append(
+            {
+                "label": "All diabetes stages",
+                "value": "mean_abs_shap_all_classes",
+            }
+        )
+
+    for class_name in target_encoder.classes_:
+        column_name = f"mean_abs_shap_{class_name}"
+        if column_name in GLOBAL_SHAP_IMPORTANCE.columns:
+            options.append({"label": class_name, "value": column_name})
+
+    return options
+
+
+GLOBAL_IMPORTANCE_OPTIONS = build_global_importance_options()
+DEFAULT_GLOBAL_IMPORTANCE_VIEW = (
+    GLOBAL_IMPORTANCE_OPTIONS[0]["value"] if GLOBAL_IMPORTANCE_OPTIONS else None
+)
+
+
+def load_primary_features():
+    if GLOBAL_SHAP_IMPORTANCE is not None:
+        ranked = [
+            feature for feature in GLOBAL_SHAP_IMPORTANCE["feature"].tolist()
+            if feature in FEATURE_COLS
+        ]
         ranked = list(dict.fromkeys(ranked))
         if len(ranked) >= PRIMARY_FEATURE_COUNT:
             return ranked[:PRIMARY_FEATURE_COUNT]
@@ -242,6 +286,75 @@ def apply_chart_theme(figure: go.Figure, height: int) -> go.Figure:
     )
     figure.update_xaxes(gridcolor="rgba(24, 49, 40, 0.08)", zerolinecolor="rgba(24, 49, 40, 0.08)")
     figure.update_yaxes(gridcolor="rgba(24, 49, 40, 0.08)", zerolinecolor="rgba(24, 49, 40, 0.08)")
+    return figure
+
+
+def describe_global_importance_view(selected_column: str | None) -> str:
+    if selected_column == "mean_abs_shap_all_classes":
+        return "All diabetes stages"
+
+    prefix = "mean_abs_shap_"
+    if selected_column and selected_column.startswith(prefix):
+        return selected_column[len(prefix):]
+
+    return "All diabetes stages"
+
+
+def build_global_importance_figure(selected_column: str | None) -> go.Figure:
+    if GLOBAL_SHAP_IMPORTANCE is None:
+        return build_empty_figure(
+            "Run src/shap_analysis.py --model xgboost to load global feature importance by diabetes stage."
+        )
+
+    metric_column = selected_column
+    if metric_column not in GLOBAL_SHAP_IMPORTANCE.columns:
+        metric_column = DEFAULT_GLOBAL_IMPORTANCE_VIEW
+
+    if metric_column is None:
+        return build_empty_figure(
+            "Class-level SHAP columns are not available in data/xgboost_shap_feature_importance.csv."
+        )
+
+    importance_frame = GLOBAL_SHAP_IMPORTANCE[["feature", metric_column]].copy()
+    importance_frame[metric_column] = pd.to_numeric(
+        importance_frame[metric_column], errors="coerce"
+    ).fillna(0.0)
+    importance_frame = importance_frame.rename(columns={metric_column: "importance"})
+
+    if importance_frame.empty:
+        return build_empty_figure("No SHAP feature-importance rows are available.")
+
+    importance_frame["display_feature"] = importance_frame["feature"].map(pretty_feature_name)
+    importance_frame = importance_frame.sort_values("importance", ascending=False).head(
+        GLOBAL_IMPORTANCE_MAX_FEATURES
+    )
+    importance_frame = importance_frame.iloc[::-1]
+
+    figure = px.bar(
+        importance_frame,
+        x="importance",
+        y="display_feature",
+        orientation="h",
+        hover_data={
+            "feature": True,
+            "display_feature": False,
+            "importance": ":.4f",
+        },
+        color_discrete_sequence=["#2f8f68"],
+    )
+    figure = apply_chart_theme(figure, height=360)
+    figure.update_layout(
+        xaxis_title="Mean |SHAP|",
+        yaxis_title=None,
+        showlegend=False,
+        margin=dict(l=20, r=20, t=12, b=24),
+    )
+    figure.update_xaxes(automargin=True)
+    figure.update_yaxes(automargin=True)
+    figure.update_traces(
+        marker_line_width=0,
+        hovertemplate="%{y}<br>Mean |SHAP|: %{x:.3f}<extra></extra>",
+    )
     return figure
 
 
@@ -558,41 +671,66 @@ def build_recommendations(cluster_id: int):
 
 def build_global_shap_children():
     summary_file = ASSETS_DIR / f"{MODEL_ASSET_PREFIX}_shap_summary.png"
-    bar_file = ASSETS_DIR / f"{MODEL_ASSET_PREFIX}_shap_bar.png"
 
-    if not summary_file.exists() or not bar_file.exists():
-        return dbc.Alert(
-            "XGBoost SHAP assets are missing. Run src/shap_analysis.py to generate them.",
-            color="warning",
-            className="analysis-alert",
-        )
+    if summary_file.exists():
+        summary_children = [
+            html.H6("Global SHAP Summary", className="card-title"),
+            html.P(
+                "This view shows the overall SHAP distribution across the sampled evaluation records.",
+                className="support-copy",
+            ),
+            html.Img(src=app.get_asset_url(summary_file.name), className="insight-image"),
+        ]
+    else:
+        summary_children = [
+            html.H6("Global SHAP Summary", className="card-title"),
+            dbc.Alert(
+                "XGBoost SHAP summary image is missing. Run src/shap_analysis.py --model xgboost.",
+                color="warning",
+                className="analysis-alert mb-0",
+            ),
+        ]
 
     return dbc.Row(
         [
             dbc.Col(
                 dbc.Card(
-                    dbc.CardBody(
-                        [
-                            html.H6("Global SHAP Summary", className="card-title"),
-                            html.Img(src=app.get_asset_url(summary_file.name), className="insight-image"),
-                        ]
-                    ),
-                    className="analysis-card figure-surface h-100",
+                    dbc.CardBody(summary_children),
+                    className="analysis-card figure-surface",
                 ),
-                lg=6,
+                width=12,
                 className="mb-3",
             ),
             dbc.Col(
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.H6("Global Feature Importance", className="card-title"),
-                            html.Img(src=app.get_asset_url(bar_file.name), className="insight-image"),
+                            html.H6("Global Feature Importance by Stage", className="card-title"),
+                            html.P(
+                                "Choose a diabetes stage to see which features matter most for that outcome across the evaluation sample.",
+                                className="support-copy",
+                            ),
+                            dcc.Dropdown(
+                                id="global-importance-view",
+                                options=GLOBAL_IMPORTANCE_OPTIONS,
+                                value=DEFAULT_GLOBAL_IMPORTANCE_VIEW,
+                                placeholder="No class-level SHAP data available",
+                                clearable=False,
+                                disabled=not GLOBAL_IMPORTANCE_OPTIONS,
+                                className="wellness-dropdown global-importance-dropdown mb-3",
+                            ),
+                            dcc.Graph(
+                                id="global-importance-figure",
+                                figure=build_global_importance_figure(DEFAULT_GLOBAL_IMPORTANCE_VIEW),
+                                config={"displayModeBar": False, "staticPlot": True},
+                                responsive=True,
+                                className="centered-graph global-importance-graph",
+                            ),
                         ]
                     ),
-                    className="analysis-card figure-surface h-100",
+                    className="analysis-card figure-card figure-surface global-importance-card",
                 ),
-                lg=6,
+                width=12,
                 className="mb-3",
             ),
         ]
@@ -618,6 +756,16 @@ app.layout = build_layout(
     probability_figure=build_empty_figure("Run a prediction to see class probabilities."),
     local_shap_figure=build_empty_figure("Submit a risk prediction to see local SHAP drivers."),
 )
+
+
+@app.callback(
+    Output("global-importance-figure", "figure"),
+    Input("global-importance-view", "value"),
+)
+def update_global_importance_figure(selected_column):
+    return build_global_importance_figure(selected_column)
+
+
 @app.callback(
     Output("prediction-output", "children"),
     Output("probability-figure", "figure"),

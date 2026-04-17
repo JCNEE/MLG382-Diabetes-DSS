@@ -369,8 +369,8 @@ body {
     position: relative;
 }
 
-.wellness-dropdown.is-focused,
-.wellness-dropdown.is-open {
+.wellness-dropdown .Select.is-focused,
+.wellness-dropdown .Select.is-open {
     z-index: 30;
 }
 
@@ -383,6 +383,20 @@ body {
     position: absolute !important;
     width: 100% !important;
     z-index: 40 !important;
+}
+
+.global-importance-dropdown .Select,
+.global-importance-dropdown .Select.is-focused,
+.global-importance-dropdown .Select.is-open {
+    z-index: 60;
+}
+
+.global-importance-dropdown .Select-menu-outer,
+.global-importance-dropdown .Select-menu-outer.Select-menu-outer-top {
+    top: calc(100% + 8px) !important;
+    bottom: auto !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
 }
 
 .wellness-dropdown .Select-option.is-focused {
@@ -500,6 +514,10 @@ body {
     margin-right: 0;
 }
 
+.surface-stack > .row > * {
+    min-width: 0;
+}
+
 .empty-state {
     text-align: left;
 }
@@ -531,12 +549,17 @@ body {
 
 .centered-graph {
     margin: 0 auto;
+    width: 100%;
+    min-width: 0;
 }
 
 .centered-graph .js-plotly-plot,
 .centered-graph .plot-container,
 .centered-graph .svg-container {
     margin: 0 auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
 }
 
 .analysis-card,
@@ -548,10 +571,34 @@ body {
 .analysis-card {
     width: 100%;
     overflow: hidden;
+    min-width: 0;
 }
 
 .analysis-card .card-body {
     padding: 0;
+    min-width: 0;
+}
+
+.global-importance-card {
+    min-width: 0;
+    overflow: visible;
+    contain: none;
+}
+
+.global-importance-graph {
+    width: 100%;
+    min-width: 0;
+}
+
+.global-importance-card .card-body,
+.global-importance-card .js-plotly-plot,
+.global-importance-card .plot-container,
+.global-importance-card .svg-container,
+.global-importance-graph,
+.global-importance-graph .js-plotly-plot,
+.global-importance-graph .plot-container,
+.global-importance-graph .svg-container {
+    overflow: visible !important;
 }
 
 .analysis-card .card-title {
@@ -633,5 +680,9 @@ body {
         margin-right: 8px !important;
         margin-bottom: 12px !important;
         font-size: 0.9rem !important;
+    }
+
+    .global-importance-graph {
+        min-height: 320px;
     }
 }
