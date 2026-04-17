@@ -130,7 +130,7 @@ def build_layout(
                                                 build_section_header(
                                                     "Patient Intake",
                                                     "Assess diabetes stage risk",
-                                                    "Start with the highest-impact fields. Any blank value is filled with the learned baseline shown under that control.",
+                                                    "Start with the highest-impact fields and expand the optional inputs when you want a more detailed patient profile.",
                                                 ),
                                                 dbc.Row(
                                                     [
@@ -173,16 +173,6 @@ def build_layout(
                                                                             className="panel-copy",
                                                                         ),
                                                                         html.Button("Predict Risk", id="predict-btn", className="action-button action-button--primary"),
-                                                                        html.Div(
-                                                                            [
-                                                                                html.Div("Baseline fill is enabled", className="support-label"),
-                                                                                html.P(
-                                                                                    "Useful when you want to test a likely patient profile without entering every field.",
-                                                                                    className="support-copy mb-0",
-                                                                                ),
-                                                                            ],
-                                                                            className="support-card",
-                                                                        ),
                                                                     ],
                                                                     className="action-panel",
                                                                 ),
@@ -190,7 +180,7 @@ def build_layout(
                                                                     id="prediction-output",
                                                                     children=build_empty_state(
                                                                         "Prediction results will appear here",
-                                                                        "Submit the patient profile to see the diabetes-stage prediction, confidence score, and baseline-fill summary.",
+                                                                        "Submit the patient profile to see the diabetes-stage prediction, confidence score, and model explanation.",
                                                                         kicker="Risk Summary",
                                                                     ),
                                                                     className="surface-card surface-card--stacked",
@@ -264,7 +254,7 @@ def build_layout(
                                                                     id="cluster-output",
                                                                     children=build_empty_state(
                                                                         "Cluster output will appear here",
-                                                                        "Run the segmentation step after entering patient details to see the assigned cluster and how many fields were baseline-filled.",
+                                                                        "Run the segmentation step after entering patient details to see the assigned patient segment and what it means.",
                                                                         kicker="Peer Segment",
                                                                     ),
                                                                     className="surface-card surface-card--stacked",
@@ -343,14 +333,14 @@ def build_layout(
                                             [
                                                 build_section_header(
                                                     "Lifestyle Guidance",
-                                                    "Turn cluster results into practical recommendations",
-                                                    "This panel updates after you assign a patient cluster. It is designed to keep the final guidance separate from the model mechanics.",
+                                                    "Turn patient results into practical recommendations",
+                                                    "This panel updates after a risk prediction or patient-cluster assignment. It keeps the final guidance separate from the model mechanics while showing what to do next.",
                                                 ),
                                                 html.Div(
                                                     id="recommendations-output",
                                                     children=build_empty_state(
                                                         "Recommendations will appear here",
-                                                        "Assign a patient cluster first to generate the activity, diet, and follow-up guidance for that segment.",
+                                                        "Run a risk prediction or assign a patient cluster to generate lifestyle guidance and next-step advice.",
                                                         kicker="Care Guidance",
                                                     ),
                                                     className="surface-card surface-card--tall",

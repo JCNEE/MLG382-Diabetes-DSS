@@ -520,6 +520,8 @@ def build_local_shap_outputs(patient_raw: pd.DataFrame, patient_encoded: pd.Data
     model = PREDICTION_MODEL
     predicted_index = int(model.predict(patient_encoded)[0])
     predicted_class = target_encoder.inverse_transform([predicted_index])[0]
+    probability_frame = pd.Series(model.predict_proba(patient_encoded)[0], index=model.classes_)
+    predicted_probability = float(probability_frame.get(predicted_index, 0.0))
 
     explainer = get_shap_explainer()
     shap_values, base_values = compute_shap_values(explainer, patient_encoded)
@@ -542,8 +544,12 @@ def build_local_shap_outputs(patient_raw: pd.DataFrame, patient_encoded: pd.Data
     contribution_df["display_feature"] = contribution_df["feature"].map(pretty_feature_name)
     contribution_df["direction"] = np.where(
         contribution_df["shap_value"] >= 0,
-        "Pushes higher",
-        "Pushes lower",
+        "Supports predicted stage",
+        "Pulls away from predicted stage",
+    )
+    total_abs_shap = float(contribution_df["abs_shap_value"].sum())
+    contribution_df["impact_share"] = (
+        contribution_df["abs_shap_value"] / total_abs_shap if total_abs_shap else 0.0
     )
 
     top_drivers = contribution_df.sort_values("abs_shap_value", ascending=False).head(10).copy()
@@ -564,33 +570,68 @@ def build_local_shap_outputs(patient_raw: pd.DataFrame, patient_encoded: pd.Data
             "shap_value": ":.4f",
         },
         color_discrete_map={
-            "Pushes higher": "#c9774c",
-            "Pushes lower": "#2f7a72",
+            "Supports predicted stage": "#2f8f68",
+            "Pulls away from predicted stage": "#c9774c",
         },
     )
     figure = apply_chart_theme(figure, height=420)
-    figure.update_layout(xaxis_title="SHAP value", yaxis_title="Feature", legend_title_text="Effect")
+    figure.update_layout(
+        xaxis_title="SHAP value (effect on predicted stage score)",
+        yaxis_title="Feature",
+        legend_title_text="Contribution",
+    )
     figure.update_traces(texttemplate="%{x:.3f}", textposition="outside")
 
-    top_list = []
-    for _, row in contribution_df.sort_values("abs_shap_value", ascending=False).head(3).iterrows():
-        top_list.append(
-            html.Li(
-                f"{row['display_feature']}: {row['direction']} the predicted class "
-                f"(input = {format_value(row['raw_value'])}, SHAP = {row['shap_value']:.3f})"
+    supporting_features = contribution_df[contribution_df["shap_value"] > 0].sort_values(
+        "abs_shap_value", ascending=False
+    ).head(3)
+    opposing_features = contribution_df[contribution_df["shap_value"] < 0].sort_values(
+        "abs_shap_value", ascending=False
+    ).head(3)
+
+    def build_driver_items(driver_frame: pd.DataFrame, *, supports_stage: bool):
+        items = []
+        for _, row in driver_frame.iterrows():
+            if supports_stage:
+                explanation_text = f"increased model support for {predicted_class}"
+            else:
+                explanation_text = f"pulled the model away from {predicted_class}"
+
+            items.append(
+                html.Li(
+                    f"{row['display_feature']}: input = {format_value(row['raw_value'])}; "
+                    f"this {explanation_text} "
+                    f"(SHAP = {row['shap_value']:.3f}, impact share = {row['impact_share'] * 100:.1f}%)."
+                )
             )
-        )
+        return items
+
+    supporting_items = build_driver_items(supporting_features, supports_stage=True)
+    opposing_items = build_driver_items(opposing_features, supports_stage=False)
 
     summary = dbc.Card(
         dbc.CardBody(
             [
-                html.H5(f"Local SHAP Explanation for {predicted_class}", className="card-title"),
+                html.H5(f"Why the Model Predicted {predicted_class}", className="card-title"),
                 html.P(
-                    f"Base value for the predicted class: {base_value:.3f}. "
-                    "The chart below shows which patient features moved the prediction away from that baseline.",
+                    f"The model assigned {predicted_probability * 100:.1f}% probability to {predicted_class}. "
+                    f"Local SHAP starts from the class base score ({base_value:.3f}), which is the model's raw starting score for this stage before patient-specific features are applied.",
+                    className="mb-2",
+                ),
+                html.P(
+                    "Positive SHAP values support the predicted stage, while negative values pull the model away from it. Larger absolute SHAP values mean the feature had a stronger effect on the final decision. The chart below ranks the ten strongest patient-specific drivers.",
                     className="mb-3",
                 ),
-                html.Ul(top_list, className="mb-0"),
+                html.Div("Strongest Features Supporting This Stage", className="support-label"),
+                html.Ul(supporting_items, className="mb-3") if supporting_items else html.P(
+                    "No major patient features are strongly increasing the model's support for this stage.",
+                    className="mb-3",
+                ),
+                html.Div("Strongest Features Pulling Against This Stage", className="support-label"),
+                html.Ul(opposing_items, className="mb-0") if opposing_items else html.P(
+                    "No major patient features are strongly pulling the model away from this stage.",
+                    className="mb-0",
+                ),
             ]
         ),
         className="analysis-card h-100",
@@ -629,8 +670,510 @@ def load_or_build_cluster_profiles():
 
 cluster_profiles = load_or_build_cluster_profiles()
 
+CLUSTER_SEGMENT_LABELS = {
+    "healthy": "Healthy Patient Cluster",
+    "elevated_glucose": "Elevated Glucose Patient Cluster",
+    "unhealthy": "Unhealthy Patient Cluster",
+}
 
-def build_recommendations(cluster_id: int):
+CLUSTER_SEGMENT_SUMMARIES = {
+    "healthy": (
+        "This segment represents the most stable overall profile in the training data. "
+        "Patients in this group tend to be more active, slightly better on diet quality, "
+        "leaner on average, and lower on glucose markers than the typical patient."
+    ),
+    "elevated_glucose": (
+        "This segment is defined mainly by poorer glucose control. Patients here do not "
+        "necessarily have the highest BMI, but their fasting glucose and HbA1c values are "
+        "the highest of the three groups, so blood sugar management is the main concern."
+    ),
+    "unhealthy": (
+        "This segment reflects the broadest lifestyle and metabolic burden in the training data. "
+        "Patients in this group tend to have the highest BMI, the weakest diet score, and glucose "
+        "markers that remain above the typical training profile."
+    ),
+}
+
+
+def build_cluster_segment_keys():
+    if cluster_profiles is None or cluster_profiles.empty:
+        return {}
+
+    required_columns = [
+        "physical_activity_minutes_per_week",
+        "diet_score",
+        "bmi",
+        "glucose_fasting",
+        "hba1c",
+    ]
+    if any(column not in cluster_profiles.columns for column in required_columns):
+        return {}
+
+    profiles = cluster_profiles[required_columns].apply(pd.to_numeric, errors="coerce")
+    segment_keys: dict[int, str] = {}
+
+    overall_health_rank = (
+        profiles["physical_activity_minutes_per_week"].rank(method="dense", ascending=False)
+        + profiles["diet_score"].rank(method="dense", ascending=False)
+        + profiles["bmi"].rank(method="dense", ascending=True)
+        + profiles["glucose_fasting"].rank(method="dense", ascending=True)
+        + profiles["hba1c"].rank(method="dense", ascending=True)
+    )
+    healthiest_cluster = int(overall_health_rank.idxmin())
+    segment_keys[healthiest_cluster] = "healthy"
+
+    remaining_clusters = [cluster_id for cluster_id in profiles.index if int(cluster_id) not in segment_keys]
+    if remaining_clusters:
+        remaining_profiles = profiles.loc[remaining_clusters]
+        glucose_risk_rank = (
+            remaining_profiles["glucose_fasting"].rank(method="dense", ascending=False)
+            + remaining_profiles["hba1c"].rank(method="dense", ascending=False)
+        )
+        highest_glucose_cluster = int(glucose_risk_rank.idxmin())
+        segment_keys[highest_glucose_cluster] = "elevated_glucose"
+
+    for cluster_id in profiles.index:
+        cluster_key = int(cluster_id)
+        if cluster_key in segment_keys:
+            continue
+        segment_keys[cluster_key] = "unhealthy"
+
+    return segment_keys
+
+
+CLUSTER_SEGMENT_KEYS = build_cluster_segment_keys()
+
+
+def get_cluster_segment_key(cluster_id: int) -> str | None:
+    return CLUSTER_SEGMENT_KEYS.get(cluster_id)
+
+
+def get_cluster_display_name(cluster_id: int) -> str:
+    segment_key = get_cluster_segment_key(cluster_id)
+    if segment_key is None:
+        return f"Cluster {cluster_id}"
+    return CLUSTER_SEGMENT_LABELS.get(segment_key, f"Cluster {cluster_id}")
+
+
+def describe_cluster_position(value: float, baseline: float, *, higher_is_healthier: bool) -> str:
+    if pd.isna(value) or pd.isna(baseline):
+        return "relative position not available"
+    if np.isclose(value, baseline):
+        return "around the training median"
+    if higher_is_healthier:
+        return "above the training median" if value > baseline else "below the training median"
+    return "below the training median" if value < baseline else "above the training median"
+
+
+def build_cluster_meaning(cluster_id: int):
+    if cluster_profiles is None or cluster_id not in cluster_profiles.index:
+        return None
+
+    profile = cluster_profiles.loc[cluster_id]
+    segment_key = get_cluster_segment_key(cluster_id)
+    summary = CLUSTER_SEGMENT_SUMMARIES.get(
+        segment_key,
+        "This cluster groups patients who share a similar overall lifestyle and metabolic pattern in the training data.",
+    )
+    cluster_size = int(profile.get("cluster_size", 0))
+
+    details = [
+        "Being assigned to this segment means the current patient looks most similar to this group in the training data. It is a similarity profile, not a diagnosis by itself.",
+        f"This segment contains {cluster_size:,} training patients with a similar overall pattern.",
+        (
+            f"Average weekly activity is {profile.get('physical_activity_minutes_per_week', np.nan):.1f} minutes, "
+            f"which is {describe_cluster_position(profile.get('physical_activity_minutes_per_week', np.nan), cluster_baselines['physical_activity_minutes_per_week'], higher_is_healthier=True)} "
+            f"compared with the training median of {cluster_baselines['physical_activity_minutes_per_week']:.1f}."
+        ),
+        (
+            f"Average diet score is {profile.get('diet_score', np.nan):.2f}, "
+            f"which is {describe_cluster_position(profile.get('diet_score', np.nan), cluster_baselines['diet_score'], higher_is_healthier=True)} "
+            f"compared with the training median of {cluster_baselines['diet_score']:.2f}."
+        ),
+        (
+            f"Average BMI is {profile.get('bmi', np.nan):.2f}, "
+            f"which is {describe_cluster_position(profile.get('bmi', np.nan), cluster_baselines['bmi'], higher_is_healthier=False)} "
+            f"compared with the training median of {cluster_baselines['bmi']:.2f}."
+        ),
+        (
+            f"Average fasting glucose is {profile.get('glucose_fasting', np.nan):.2f}, "
+            f"which is {describe_cluster_position(profile.get('glucose_fasting', np.nan), cluster_baselines['glucose_fasting'], higher_is_healthier=False)} "
+            f"compared with the training median of {cluster_baselines['glucose_fasting']:.2f}."
+        ),
+        (
+            f"Average HbA1c is {profile.get('hba1c', np.nan):.2f}, "
+            f"which is {describe_cluster_position(profile.get('hba1c', np.nan), cluster_baselines['hba1c'], higher_is_healthier=False)} "
+            f"compared with the training median of {cluster_baselines['hba1c']:.2f}."
+        ),
+    ]
+
+    return {
+        "summary": summary,
+        "details": details,
+    }
+
+
+def build_stage_meaning_items(predicted_class: str | None):
+    if predicted_class == "No Diabetes":
+        return [
+            "The current inputs are closer to a non-diabetes pattern than to the diabetes stages in this model.",
+            "This is the lowest-risk result in the tool, but it is not a guarantee that diabetes cannot develop later.",
+        ]
+
+    if predicted_class == "Pre-Diabetes":
+        return [
+            "The current inputs suggest glucose regulation may be starting to drift outside the healthy range.",
+            "This is a warning stage where early lifestyle change and clinical follow-up can still slow or prevent progression.",
+        ]
+
+    if predicted_class == "Type 2":
+        return [
+            "The current inputs are more consistent with a Type 2 diabetes pattern than the other stages in this model.",
+            "This usually reflects sustained glucose-control strain and should be treated as a prompt for clinical confirmation rather than a standalone diagnosis.",
+        ]
+
+    if predicted_class == "Type 1":
+        return [
+            "The current inputs are most consistent with a Type 1 diabetes pattern in this model.",
+            "A new or unexpected Type 1 pattern should be treated more urgently than a routine watch-and-wait result because Type 1 diabetes can worsen quickly.",
+        ]
+
+    if predicted_class == "Gestational":
+        return [
+            "The current inputs are most consistent with a gestational diabetes pattern in this model.",
+            "Gestational diabetes needs pregnancy-specific review because both maternal and fetal health can be affected if glucose remains uncontrolled.",
+        ]
+
+    return [
+        "The predicted stage shows which diabetes pattern the model considers the best fit for the current inputs.",
+        "This result should be reviewed alongside formal tests, symptoms, and clinical history rather than used on its own.",
+    ]
+
+
+def build_combined_meaning_note(predicted_class: str | None, segment_key: str | None):
+    if predicted_class == "No Diabetes":
+        if segment_key == "healthy":
+            return "Both the stage result and the segment suggest a relatively stable overall profile, so the main goal is to maintain healthy habits and keep screening routine."
+        if segment_key == "elevated_glucose":
+            return "The stage result is not diabetes, but the segment still suggests some glucose pressure compared with the healthiest group, so prevention should stay active."
+        if segment_key == "unhealthy":
+            return "The stage result is less concerning than diabetes, but the segment still suggests lifestyle or metabolic strain that can raise future risk."
+
+    if predicted_class == "Pre-Diabetes":
+        if segment_key == "healthy":
+            return "This combination suggests glucose may be rising even though the broader lifestyle profile is comparatively stable, so early action still matters."
+        if segment_key == "elevated_glucose":
+            return "Both the stage result and the segment point toward glucose burden, so this is a strong prevention-and-follow-up signal."
+        if segment_key == "unhealthy":
+            return "This combination suggests both rising glucose risk and a broader lifestyle or metabolic burden, so prevention should be structured rather than casual."
+
+    if predicted_class == "Type 2":
+        if segment_key == "healthy":
+            return "The diabetes-stage result is more concerning than the broader segment profile, which can happen when glucose markers are carrying much of the signal."
+        if segment_key == "elevated_glucose":
+            return "Both the stage result and the segment point strongly toward poor glucose control, so medical review should not be delayed."
+        if segment_key == "unhealthy":
+            return "Both the stage result and the segment suggest a broader metabolic burden rather than one isolated issue, so follow-up should be comprehensive."
+
+    if predicted_class == "Type 1":
+        return "For a Type 1 pattern, the predicted stage matters more clinically than the segment label. Use the segment as lifestyle context, but let urgency and follow-up be driven by the stage result."
+
+    if predicted_class == "Gestational":
+        return "For a gestational diabetes pattern, the predicted stage matters more clinically than the segment label. Use the segment as background context, but let pregnancy-specific care drive the plan."
+
+    return "The stage prediction estimates which diabetes pattern fits best, while the segment shows what broader patient profile the person resembles. Together they help focus follow-up."
+
+
+def get_entered_numeric_value(
+    patient_raw: pd.DataFrame | None,
+    missing_columns: list[str] | None,
+    column: str,
+) -> float | None:
+    if patient_raw is None or column not in patient_raw.columns:
+        return None
+    if missing_columns and column in missing_columns:
+        return None
+
+    value = patient_raw.at[0, column]
+    if value is None or value == "":
+        return None
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if np.isnan(numeric_value):
+        return None
+    return numeric_value
+
+
+def get_entered_text_value(
+    patient_raw: pd.DataFrame | None,
+    missing_columns: list[str] | None,
+    column: str,
+) -> str | None:
+    if patient_raw is None or column not in patient_raw.columns:
+        return None
+    if missing_columns and column in missing_columns:
+        return None
+
+    value = patient_raw.at[0, column]
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def build_patient_specific_actions(
+    patient_raw: pd.DataFrame | None,
+    missing_columns: list[str] | None,
+    predicted_class: str | None,
+):
+    actions = []
+
+    activity_value = get_entered_numeric_value(patient_raw, missing_columns, "physical_activity_minutes_per_week")
+    if activity_value is not None:
+        if activity_value < 90:
+            actions.append(
+                f"Physical activity is currently {activity_value:.0f} minutes per week, which is well below the usual 150-minute target; increasing movement is one of the clearest priorities."
+            )
+        elif activity_value < 150:
+            actions.append(
+                f"Physical activity is {activity_value:.0f} minutes per week, so increasing it toward 150 minutes per week would better support glucose control and weight management."
+            )
+
+    diet_value = get_entered_numeric_value(patient_raw, missing_columns, "diet_score")
+    if diet_value is not None and diet_value < cluster_baselines["diet_score"]:
+        actions.append(
+            f"The diet score is {diet_value:.2f}, which is below the training median of {cluster_baselines['diet_score']:.2f}; diet quality should improve, especially around refined carbohydrates, sugary drinks, and fiber intake."
+        )
+
+    bmi_value = get_entered_numeric_value(patient_raw, missing_columns, "bmi")
+    if bmi_value is not None:
+        if bmi_value >= 30:
+            actions.append(
+                f"BMI is {bmi_value:.2f}, which suggests obesity-range weight burden; structured weight-management support could have a meaningful effect on glucose and cardiovascular risk."
+            )
+        elif bmi_value >= 25:
+            actions.append(
+                f"BMI is {bmi_value:.2f}, which suggests excess weight may be contributing to risk; even modest weight reduction could help improve metabolic control."
+            )
+
+    fasting_glucose = get_entered_numeric_value(patient_raw, missing_columns, "glucose_fasting")
+    if fasting_glucose is not None:
+        if fasting_glucose >= 126:
+            actions.append(
+                f"Fasting glucose is {fasting_glucose:.2f}, which is already in a clearly raised range and should be reviewed clinically rather than monitored casually."
+            )
+        elif fasting_glucose >= 100:
+            actions.append(
+                f"Fasting glucose is {fasting_glucose:.2f}, which is above the usual healthy range and supports closer follow-up of glucose markers."
+            )
+
+    postprandial_glucose = get_entered_numeric_value(patient_raw, missing_columns, "glucose_postprandial")
+    if postprandial_glucose is not None:
+        if postprandial_glucose >= 200:
+            actions.append(
+                f"Post-meal glucose is {postprandial_glucose:.2f}, which is markedly raised and strengthens the case for prompt clinical review."
+            )
+        elif postprandial_glucose >= 140:
+            actions.append(
+                f"Post-meal glucose is {postprandial_glucose:.2f}, which suggests meal-related glucose control may need attention."
+            )
+
+    hba1c_value = get_entered_numeric_value(patient_raw, missing_columns, "hba1c")
+    if hba1c_value is not None:
+        if hba1c_value >= 6.5:
+            actions.append(
+                f"HbA1c is {hba1c_value:.2f}, which is in a diabetic-range marker and supports prompt clinical review."
+            )
+        elif hba1c_value >= 5.7:
+            actions.append(
+                f"HbA1c is {hba1c_value:.2f}, which is above the usual healthy range and suggests glucose control should be followed more closely."
+            )
+
+    systolic_bp = get_entered_numeric_value(patient_raw, missing_columns, "systolic_bp")
+    diastolic_bp = get_entered_numeric_value(patient_raw, missing_columns, "diastolic_bp")
+    if systolic_bp is not None or diastolic_bp is not None:
+        systolic_text = f"{systolic_bp:.0f}" if systolic_bp is not None else "?"
+        diastolic_text = f"{diastolic_bp:.0f}" if diastolic_bp is not None else "?"
+        if (systolic_bp is not None and systolic_bp >= 140) or (diastolic_bp is not None and diastolic_bp >= 90):
+            actions.append(
+                f"Blood pressure is {systolic_text}/{diastolic_text}, which is clearly raised and should be managed alongside diabetes risk because cardiovascular risk compounds quickly."
+            )
+        elif (systolic_bp is not None and systolic_bp >= 130) or (diastolic_bp is not None and diastolic_bp >= 80):
+            actions.append(
+                f"Blood pressure is {systolic_text}/{diastolic_text}, which is above ideal and worth addressing as part of the overall metabolic-risk plan."
+            )
+
+    ldl_value = get_entered_numeric_value(patient_raw, missing_columns, "ldl_cholesterol")
+    triglycerides_value = get_entered_numeric_value(patient_raw, missing_columns, "triglycerides")
+    if ldl_value is not None and ldl_value >= 130:
+        actions.append(
+            f"LDL cholesterol is {ldl_value:.2f}, so lipid management should be part of the follow-up plan, especially if diabetes risk is already elevated."
+        )
+    if triglycerides_value is not None and triglycerides_value >= 150:
+        actions.append(
+            f"Triglycerides are {triglycerides_value:.2f}, which suggests additional metabolic strain and strengthens the case for nutrition-focused follow-up."
+        )
+
+    sleep_value = get_entered_numeric_value(patient_raw, missing_columns, "sleep_hours_per_day")
+    if sleep_value is not None and (sleep_value < 7 or sleep_value > 9):
+        actions.append(
+            f"Sleep duration is {sleep_value:.1f} hours per day, so sleep pattern may be adding metabolic strain; aiming for a steadier 7 to 9 hours would be more supportive."
+        )
+
+    screen_time = get_entered_numeric_value(patient_raw, missing_columns, "screen_time_hours_per_day")
+    if screen_time is not None and screen_time > 6:
+        actions.append(
+            f"Screen time is {screen_time:.1f} hours per day, which suggests prolonged sedentary time; adding regular movement breaks through the day would help."
+        )
+
+    alcohol_value = get_entered_numeric_value(patient_raw, missing_columns, "alcohol_consumption_per_week")
+    if alcohol_value is not None and alcohol_value > 14:
+        actions.append(
+            f"Alcohol intake is {alcohol_value:.1f} drinks per week, so reducing intake may help with glucose control, blood pressure, and weight management."
+        )
+
+    smoking_status = get_entered_text_value(patient_raw, missing_columns, "smoking_status")
+    if smoking_status and "current" in smoking_status.lower():
+        actions.append(
+            "Current smoking was reported, so smoking cessation support should be part of the plan because it increases cardiovascular and metabolic risk."
+        )
+
+    family_history = get_entered_numeric_value(patient_raw, missing_columns, "family_history_diabetes")
+    if family_history is not None and family_history >= 1:
+        actions.append(
+            "Family history of diabetes was reported, which increases baseline risk and supports more proactive monitoring."
+        )
+
+    hypertension_history = get_entered_numeric_value(patient_raw, missing_columns, "hypertension_history")
+    if hypertension_history is not None and hypertension_history >= 1:
+        actions.append(
+            "A history of hypertension was reported, so blood pressure control should remain part of the diabetes prevention or management plan."
+        )
+
+    cardiovascular_history = get_entered_numeric_value(patient_raw, missing_columns, "cardiovascular_history")
+    if cardiovascular_history is not None and cardiovascular_history >= 1:
+        actions.append(
+            "A history of cardiovascular disease was reported, which raises the urgency of follow-up because diabetes and cardiovascular risk reinforce each other."
+        )
+
+    if not actions:
+        if predicted_class == "No Diabetes":
+            actions.append(
+                "The values entered do not show one strong patient-specific risk flag, so the main priority is maintaining healthy habits and staying consistent with routine screening."
+            )
+        else:
+            actions.append(
+                "The values entered do not point to one dominant lifestyle issue, so the safest approach is to follow the stage-specific guidance and keep monitoring consistent."
+            )
+
+    return actions
+
+
+def build_personalisation_note(missing_columns: list[str] | None):
+    if missing_columns is None:
+        return "Patient-specific priorities use the values entered into the form."
+
+    entered_count = len(FEATURE_COLS) - len(missing_columns)
+    if not missing_columns:
+        return f"Patient-specific priorities use all {entered_count} entered inputs from the form."
+
+    return (
+        f"Patient-specific priorities use the {entered_count} values entered into the form. "
+        "Blank fields were excluded from this personalised section."
+    )
+
+
+def build_stage_guidance(predicted_class: str | None):
+    if predicted_class == "No Diabetes":
+        return [
+            "Treat this as a prevention result, not as permission to stop monitoring risk factors.",
+            "The main priorities are maintaining physical activity, a stable weight, good sleep, and a diet that does not gradually push glucose higher over time.",
+            "If family history, blood pressure, or glucose markers are borderline, keep follow-up proactive even though the stage result is the lowest-risk one.",
+        ]
+
+    if predicted_class == "Pre-Diabetes":
+        return [
+            "This is the stage where lifestyle change has the best chance to delay or prevent progression to diabetes.",
+            "The most useful priorities are regular weekly activity, lower intake of refined carbohydrates and sugary drinks, weight reduction if needed, and steady follow-up of glucose markers.",
+            "Avoid a passive wait-and-see approach; this stage is best handled with a specific prevention plan.",
+        ]
+
+    if predicted_class == "Type 2":
+        return [
+            "Type 2 guidance should combine medical review with lifestyle change rather than relying on lifestyle alone.",
+            "The practical priorities are glucose control, nutrition quality, regular activity, weight management if needed, and control of blood pressure and cholesterol risk.",
+            "Long-term complication prevention matters here, so eye, kidney, foot, and cardiovascular follow-up should be part of the plan.",
+        ]
+
+    if predicted_class == "Type 1":
+        return [
+            "Type 1 diabetes is not mainly managed through lifestyle alone; insulin education and close clinical support are central.",
+            "The practical priorities are glucose monitoring, hypoglycaemia safety, sick-day planning, and clear action steps for rising glucose or ketones.",
+            "Lifestyle habits still matter, but they support treatment rather than replacing it.",
+        ]
+
+    if predicted_class == "Gestational":
+        return [
+            "Gestational diabetes guidance needs to be pregnancy-specific rather than treated like standard Type 2 advice.",
+            "The practical priorities are glucose monitoring, meal planning that fits pregnancy care goals, and close coordination with the obstetric team.",
+            "Follow-up should continue after delivery as well, because future diabetes risk can remain higher even when pregnancy ends.",
+        ]
+
+    return [
+        "Use the predicted stage as a guide to urgency and follow-up rather than as a final diagnosis.",
+        "The safest approach is structured clinical review plus steady improvement in lifestyle risk factors.",
+    ]
+
+
+def build_stage_next_steps(predicted_class: str | None):
+    if predicted_class == "No Diabetes":
+        return [
+            "Maintain the current healthy pattern and continue routine diabetes screening during regular primary care visits.",
+            "If there is family history, raised blood pressure, or increasing glucose markers, ask for repeat fasting glucose or HbA1c testing rather than waiting for symptoms.",
+            "Use this result as a prevention window: keep activity up, protect sleep, and avoid gradual weight gain over time.",
+        ]
+
+    if predicted_class == "Pre-Diabetes":
+        return [
+            "Arrange a primary care follow-up to confirm the risk pattern with formal lab review and repeat HbA1c or fasting glucose testing.",
+            "Start a structured prevention plan now, especially regular activity, carbohydrate quality improvement, and weight reduction if needed.",
+            "Ask whether referral to a dietitian, diabetes prevention programme, or more frequent monitoring is appropriate.",
+        ]
+
+    if predicted_class == "Type 2":
+        return [
+            "Arrange prompt clinical review to confirm the diagnosis, review glucose and HbA1c results, and decide whether medication is needed.",
+            "Discuss a full diabetes care plan, including blood pressure, cholesterol, kidney monitoring, eye screening, foot checks, and self-monitoring guidance.",
+            "Begin lifestyle changes immediately while the medical plan is being confirmed, especially around activity, nutrition, and weight management.",
+        ]
+
+    if predicted_class == "Type 1":
+        return [
+            "If this is a new or unexpected result, seek urgent medical review because Type 1 diabetes needs rapid clinical assessment and management.",
+            "If Type 1 has already been diagnosed, the next steps are close coordination with a diabetes specialist team, insulin education, glucose monitoring, and sick-day planning.",
+            "Ask for guidance on ketone monitoring, hypoglycaemia management, and when to seek urgent care if symptoms worsen.",
+        ]
+
+    if predicted_class == "Gestational":
+        return [
+            "Contact the obstetric and diabetes care team promptly because gestational diabetes needs close pregnancy-specific follow-up.",
+            "Review blood glucose monitoring targets, meal planning, and whether medication or insulin is needed during pregnancy.",
+            "Plan postpartum glucose follow-up as well, because diabetes risk can remain elevated after delivery.",
+        ]
+
+    return [
+        "Review the result with a clinician and use it alongside formal testing, symptoms, and medical history rather than as a standalone diagnosis.",
+        "Focus on structured follow-up, glucose monitoring, and steady lifestyle improvement while the clinical picture is clarified.",
+    ]
+
+
+def build_recommendations(
+    cluster_id: int,
+    predicted_class: str | None = None,
+    patient_raw: pd.DataFrame | None = None,
+    missing_columns: list[str] | None = None,
+):
     if cluster_profiles is None or cluster_id not in cluster_profiles.index:
         return dbc.Alert(
             "Cluster profiles are not available yet. Re-run src/train_models.py to generate them.",
@@ -639,7 +1182,24 @@ def build_recommendations(cluster_id: int):
         )
 
     profile = cluster_profiles.loc[cluster_id]
+    cluster_name = get_cluster_display_name(cluster_id)
+    segment_key = get_cluster_segment_key(cluster_id)
+    cluster_meaning = build_cluster_meaning(cluster_id)
     recommendation_lines = []
+    meaning_items = build_stage_meaning_items(predicted_class)
+    stage_guidance = build_stage_guidance(predicted_class)
+    next_steps = build_stage_next_steps(predicted_class)
+    combined_meaning_note = build_combined_meaning_note(predicted_class, segment_key)
+    patient_specific_actions = build_patient_specific_actions(patient_raw, missing_columns, predicted_class)
+    personalisation_note = build_personalisation_note(missing_columns)
+
+    if cluster_meaning:
+        meaning_items.append(
+            f"The assigned segment is the {cluster_name}, which means the patient most closely matches a group in the training data with a similar overall lifestyle and metabolic pattern."
+        )
+        meaning_items.append(cluster_meaning["summary"])
+    if combined_meaning_note:
+        meaning_items.append(combined_meaning_note)
 
     if profile.get("physical_activity_minutes_per_week", 0) < max(150, cluster_baselines["physical_activity_minutes_per_week"]):
         recommendation_lines.append("Increase weekly physical activity toward at least 150 minutes.")
@@ -658,11 +1218,27 @@ def build_recommendations(cluster_id: int):
     return dbc.Card(
         dbc.CardBody(
             [
-                html.H5(f"Lifestyle Recommendations for Cluster {cluster_id}", className="card-title"),
+                html.H5("Lifestyle Guidance", className="card-title"),
+                html.P(
+                    f"The predicted stage shows which diabetes pattern the model thinks fits best, and the segment shows the broader patient profile this case most resembles."
+                    if predicted_class
+                    else f"The patient aligns with the {cluster_name}. These recommendations are based on the assigned patient segment.",
+                    className="mb-3",
+                ),
+                html.Div("What This Means", className="support-label"),
+                html.Ul([html.Li(text) for text in meaning_items], className="mb-3"),
+                html.Div("Guidance Based on This Stage", className="support-label"),
+                html.Ul([html.Li(text) for text in stage_guidance], className="mb-3"),
+                html.Div("Priority Actions Based on Current Inputs", className="support-label"),
+                html.P(personalisation_note, className="mb-2 text-muted"),
+                html.Ul([html.Li(text) for text in patient_specific_actions], className="mb-3"),
+                html.Div("Background Pattern From This Segment", className="support-label"),
                 html.P(f"Average weekly activity: {profile.get('physical_activity_minutes_per_week', np.nan):.1f} minutes"),
                 html.P(f"Average diet score: {profile.get('diet_score', np.nan):.1f}"),
                 html.P(f"Average BMI: {profile.get('bmi', np.nan):.1f}"),
-                html.Ul([html.Li(text) for text in recommendation_lines], className="mb-0"),
+                html.Ul([html.Li(text) for text in recommendation_lines], className="mb-3"),
+                html.Div("What To Do Next", className="support-label"),
+                html.Ul([html.Li(text) for text in next_steps], className="mb-0"),
             ]
         ),
         className="analysis-card",
@@ -784,9 +1360,7 @@ def predict_risk(n_clicks, *values):
         )
 
     raw_inputs = dict(zip(FEATURE_COLS, values))
-    patient_raw, patient_encoded, _, missing_columns = prepare_patient_features(raw_inputs)
-    missing_primary = [column for column in missing_columns if column in PRIMARY_FEATURES]
-    missing_secondary = [column for column in missing_columns if column in SECONDARY_FEATURES]
+    patient_raw, patient_encoded, _, _ = prepare_patient_features(raw_inputs)
 
     model = PREDICTION_MODEL
     predicted_index = int(model.predict(patient_encoded)[0])
@@ -795,19 +1369,26 @@ def predict_risk(n_clicks, *values):
     proba_frame = pd.Series(model.predict_proba(patient_encoded)[0], index=model.classes_)
     aligned_probabilities = proba_frame.reindex(range(len(target_encoder.classes_)), fill_value=0.0).to_numpy()
     confidence = float(aligned_probabilities[predicted_index])
+    ranked_indices = np.argsort(aligned_probabilities)[::-1]
+    runner_up_index = int(ranked_indices[1]) if len(ranked_indices) > 1 else predicted_index
+    runner_up_class = target_encoder.inverse_transform([runner_up_index])[0]
+    runner_up_confidence = float(aligned_probabilities[runner_up_index])
+    confidence_gap = max(confidence - runner_up_confidence, 0.0)
 
     prediction_card = dbc.Card(
         dbc.CardBody(
             [
                 html.H4(f"Predicted Diabetes Stage: {predicted_class}", className="card-title"),
-                html.P(f"Model used: {MODEL_LABEL}"),
-                html.P(f"Prediction confidence: {confidence * 100:.1f}%"),
                 html.P(
-                    f"Blank primary fields auto-filled from baseline: {len(missing_primary)} ({format_feature_list(missing_primary)})",
-                    className="mb-1 text-muted",
+                    f"The model found this patient most consistent with the {predicted_class} stage based on the current lifestyle, demographic, and clinical inputs.",
+                    className="mb-2",
                 ),
                 html.P(
-                    f"Blank optional advanced fields auto-filled from baseline: {len(missing_secondary)} ({format_feature_list(missing_secondary)})",
+                    f"Model confidence is {confidence * 100:.1f}%, meaning {predicted_class} received the highest predicted probability among all available diabetes stages. This reflects model certainty, not a confirmed diagnosis.",
+                    className="mb-2",
+                ),
+                html.P(
+                    f"The next most likely stage is {runner_up_class} at {runner_up_confidence * 100:.1f}%, so the gap between the top two stages is {confidence_gap * 100:.1f} percentage points.",
                     className="mb-0 text-muted",
                 ),
             ]
@@ -825,36 +1406,49 @@ def predict_risk(n_clicks, *values):
     Output("cluster-output", "children"),
     Output("recommendations-output", "children"),
     Input("cluster-btn", "n_clicks"),
+    Input("predict-btn", "n_clicks"),
     [State(f"input-{column}", "value") for column in FEATURE_COLS],
 )
-def assign_cluster(n_clicks, *values):
-    if not n_clicks:
-        return "", ""
+def assign_cluster(cluster_clicks, predict_clicks, *values):
+    if not cluster_clicks and not predict_clicks:
+        return dash.no_update, dash.no_update
 
     raw_inputs = dict(zip(FEATURE_COLS, values))
-    _, _, patient_scaled, missing_columns = prepare_patient_features(raw_inputs)
-    missing_primary = [column for column in missing_columns if column in PRIMARY_FEATURES]
-    missing_secondary = [column for column in missing_columns if column in SECONDARY_FEATURES]
+    patient_raw, patient_encoded, patient_scaled, missing_columns = prepare_patient_features(raw_inputs)
     cluster_id = int(kmeans_model.predict(patient_scaled)[0])
+    cluster_name = get_cluster_display_name(cluster_id)
+    cluster_meaning = build_cluster_meaning(cluster_id)
+    predicted_index = int(PREDICTION_MODEL.predict(patient_encoded)[0])
+    predicted_class = target_encoder.inverse_transform([predicted_index])[0]
 
-    cluster_card = dbc.Card(
-        dbc.CardBody(
-            [
-                html.H4(f"Assigned Cluster: {cluster_id}", className="card-title"),
-                html.P(
-                    f"Blank primary fields auto-filled from baseline: {len(missing_primary)} ({format_feature_list(missing_primary)})",
-                    className="mb-1 text-muted",
-                ),
-                html.P(
-                    f"Blank optional advanced fields auto-filled from baseline: {len(missing_secondary)} ({format_feature_list(missing_secondary)})",
-                    className="mb-0 text-muted",
-                ),
-            ]
-        ),
-        className="analysis-card",
+    triggered_input = None
+    if dash.callback_context.triggered:
+        triggered_input = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
+
+    if triggered_input == "cluster-btn":
+        cluster_card = dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H4(f"Assigned Segment: {cluster_name}", className="card-title"),
+                    html.P(cluster_meaning["summary"] if cluster_meaning else "This segment groups patients with a similar overall profile.", className="mb-3"),
+                    html.Div("What This Segment Means", className="support-label"),
+                    html.Ul(
+                        [html.Li(detail) for detail in (cluster_meaning["details"] if cluster_meaning else [])],
+                        className="mb-3",
+                    ),
+                ]
+            ),
+            className="analysis-card",
+        )
+    else:
+        cluster_card = dash.no_update
+
+    recommendations = build_recommendations(
+        cluster_id,
+        predicted_class=predicted_class,
+        patient_raw=patient_raw,
+        missing_columns=missing_columns,
     )
-
-    recommendations = build_recommendations(cluster_id)
     return cluster_card, recommendations
 
 
