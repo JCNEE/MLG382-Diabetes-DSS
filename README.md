@@ -1,16 +1,17 @@
 # MLG382-Diabetes-DSS
 
-Diabetes Decision Support System project that predicts diabetes stage, identifies the most important lifestyle and clinical drivers of risk, and groups patients into lifestyle-based segments.
+Diabetes Decision Support System project that predicts diabetes stage, identifies the most important lifestyle and clinical drivers of risk, groups patients into lifestyle-based segments, and serves the results through a Dash web application.
 
 ## Current Pipeline Scope
 
-This README covers the workflow from `src/prepare_data.py` to `src/train_models.py`.
+This README covers the full workflow from `src/prepare_data.py` to `src/web_app.py`.
 
-The current pipeline does four things:
+The end-to-end pipeline does five things:
 - Splits the raw dataset into train and test sets.
 - Preprocesses the features and saves the encoders and scaler.
-- Trains three supervised classification models for diabetes stage prediction.
-- Trains a K-Means model for patient segmentation.
+- Trains three supervised classification models plus a K-Means segmentation model.
+- Generates SHAP explainability outputs for the trained classifier.
+- Launches an interactive web app for prediction, clustering, and explanation.
 
 ## Project Structure
 
@@ -18,8 +19,27 @@ The current pipeline does four things:
 - `src/prepare_data.py`: creates the train and test split and basic EDA plots.
 - `src/preprocess_data.py`: removes leakage, encodes features, scales data, and saves processed files.
 - `src/train_models.py`: balances the training data with SMOTENC, trains the models, evaluates them, and saves artifacts.
-- `artifacts/`: stores plots, encoders, confusion matrices, and trained models.
+- `src/shap_analysis.py`: generates SHAP plots and SHAP feature-importance CSV outputs for a trained tree model.
+- `src/web_app.py`: runs the Dash decision support dashboard.
+- `artifacts/`: stores plots, encoders, confusion matrices, scalers, and trained models.
+- `assets/`: stores generated SHAP images used by the dashboard.
+- `app design/`: contains the dashboard layout and CSS theme helpers.
 - `data/`: stores the split data and processed modeling tables.
+- `notebooks/`: supporting exploratory, modeling, and SHAP notebooks.
+
+## Environment Setup
+
+Create and activate a virtual environment, then install the required packages from the project root.
+
+Windows example:
+
+```powershell
+py -3.12 -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+If `py` is not available, use any local Python 3.12 installation instead.
 
 ## Run Order
 
@@ -29,6 +49,8 @@ Run the scripts in this order:
 python src/prepare_data.py
 python src/preprocess_data.py
 python src/train_models.py
+python src/shap_analysis.py --model xgboost
+python src/web_app.py
 ```
 
 If you are using the local virtual environment in this project, the Windows command is:
@@ -37,7 +59,13 @@ If you are using the local virtual environment in this project, the Windows comm
 ".\venv\Scripts\python.exe" src/prepare_data.py
 ".\venv\Scripts\python.exe" src/preprocess_data.py
 ".\venv\Scripts\python.exe" src/train_models.py
+".\venv\Scripts\python.exe" src/shap_analysis.py --model xgboost
+".\venv\Scripts\python.exe" src/web_app.py
 ```
+
+Important notes:
+- `src/shap_analysis.py --model xgboost` should be run before the dashboard if you want the global SHAP images to appear in the app.
+- `src/web_app.py` depends on artifacts created by the previous four steps.
 
 ## Step 1: Data Preparation
 
@@ -414,8 +442,80 @@ The current classifier winner is selected by:
 
 This is a reasonable rule for this project because the class distribution is imbalanced and the goal is not only to maximize overall accuracy.
 
+## Step 4: SHAP Analysis
+
+Script: `src/shap_analysis.py`
+
+Purpose:
+- Loads a trained tree-based classifier, the saved target encoder, and the processed train and test feature tables.
+- Computes SHAP values on a sampled evaluation set.
+- Saves global explainability plots for the selected model.
+- Saves a SHAP feature-importance CSV for later inspection and for the dashboard feature ranking.
+
+Default behavior:
+- The default model is `xgboost`.
+- The script samples background rows from `X_train.csv` and evaluation rows from `X_test.csv`.
+- It writes plots to `assets/` and the SHAP feature-importance CSV to `data/`.
+
+Main command:
+
+```bash
+python src/shap_analysis.py --model xgboost
+```
+
+Files produced when run for XGBoost:
+- `assets/XGBoost_shap_summary.png`
+- `assets/XGBoost_shap_bar.png`
+- `assets/XGBoost_shap_waterfall.png`
+- `data/xgboost_shap_feature_importance.csv`
+
+Other supported model values are:
+- `decision_tree`
+- `random_forest`
+- `xgboost`
+
+Dashboard note:
+- The current dashboard expects the XGBoost global SHAP images, so `--model xgboost` is the correct run mode for the app flow.
+
+## Step 5: Web Application
+
+Script: `src/web_app.py`
+
+Purpose:
+- Starts a Dash-based decision support dashboard.
+- Uses the saved XGBoost model for diabetes stage prediction.
+- Uses the saved K-Means model for patient segmentation.
+- Displays class probabilities, local SHAP explanations, and cluster-based recommendations.
+- Displays pre-generated global SHAP images from `assets/`.
+
+What the dashboard needs before it can run correctly:
+- Processed data from `src/preprocess_data.py`
+- Trained models from `src/train_models.py`
+- Saved encoders and scaler from preprocessing
+- XGBoost SHAP images from `src/shap_analysis.py`
+- Cluster profile summaries from `src/train_models.py`
+
+Run command:
+
+```bash
+python src/web_app.py
+```
+
+Expected local address:
+- `http://127.0.0.1:8050`
+
+What the app currently does:
+- Accepts patient feature inputs across numeric, binary, ordinal, and nominal fields.
+- Fills blank fields with training-set baseline values when needed.
+- Returns a predicted diabetes stage and class-probability chart.
+- Generates a local SHAP explanation for the submitted patient profile.
+- Assigns the patient to one of three K-Means clusters.
+- Shows recommendation text based on the saved cluster profile averages.
+
 ## Summary of the Pipeline
 
 1. `src/prepare_data.py` splits the raw data and creates EDA plots.
 2. `src/preprocess_data.py` removes leakage, encodes the target and features, scales the data for K-Means, and saves reusable preprocessing artifacts.
 3. `src/train_models.py` balances the training split with SMOTENC, trains Decision Tree, Random Forest, XGBoost, evaluates them on the untouched test set, compares them by Macro F1, and then trains K-Means for segmentation.
+4. `src/shap_analysis.py` generates SHAP plots and feature-importance outputs for the trained classifier, with XGBoost used for the dashboard flow.
+5. `src/web_app.py` loads the saved artifacts and serves the interactive diabetes decision support dashboard.
