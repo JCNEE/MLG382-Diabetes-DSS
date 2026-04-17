@@ -37,11 +37,14 @@ class WebDesignModule(Protocol):
         primary_inputs: Any,
         secondary_inputs: Any,
         global_shap_children: Any,
-        model_label: str,
+        model_selector: Any,
+        model_label: Any,
         feature_count: int,
         training_rows: int,
         probability_figure: Any,
         local_shap_figure: Any,
+        cluster_size_children: Any,
+        cluster_scatter_children: Any,
     ): ...
     def load_theme_css(self) -> str: ...
 
@@ -111,6 +114,8 @@ PRIMARY_FEATURE_FALLBACK = [
     "hdl_cholesterol",
 ]
 GLOBAL_IMPORTANCE_MAX_FEATURES = 12
+CLUSTER_SIZE_IMAGE = "patient_segmentation_cluster_sizes.png"
+CLUSTER_SCATTER_IMAGE = "patient_segmentation_cluster_map.png"
 
 
 def load_pickle(path: Path):
@@ -727,16 +732,25 @@ def build_local_shap_outputs(
     return predicted_class, summary, figure
 
 
-def load_or_build_cluster_profiles():
+def load_saved_cluster_labels() -> pd.Series:
+    cluster_path = DATA_DIR / "train_clusters.csv"
+    if not cluster_path.exists():
+        return pd.Series(dtype=int, name="cluster")
+
+    cluster_series = pd.read_csv(cluster_path).squeeze("columns")
+    cluster_series = pd.to_numeric(cluster_series, errors="coerce").dropna().astype(int)
+    return cluster_series.reset_index(drop=True)
+
+
+def load_or_build_cluster_profiles(cluster_labels: pd.Series | None = None):
     profile_path = DATA_DIR / "cluster_profiles.csv"
     if profile_path.exists():
         return pd.read_csv(profile_path).set_index("cluster")
 
-    cluster_path = DATA_DIR / "train_clusters.csv"
-    if not cluster_path.exists():
+    cluster_series = cluster_labels if cluster_labels is not None else load_saved_cluster_labels()
+    if cluster_series.empty:
         return None
 
-    cluster_labels = pd.read_csv(cluster_path).squeeze()
     profile_columns = [
         "physical_activity_minutes_per_week",
         "diet_score",
@@ -749,14 +763,15 @@ def load_or_build_cluster_profiles():
         return None
 
     cluster_frame = X_train[available_columns].copy()
-    cluster_frame["cluster"] = cluster_labels.to_numpy()
+    cluster_frame["cluster"] = cluster_series.to_numpy()
     profiles = cluster_frame.groupby("cluster")[available_columns].mean().round(2)
     profiles["cluster_size"] = cluster_frame.groupby("cluster").size()
     profiles.reset_index().to_csv(profile_path, index=False)
     return profiles
 
 
-cluster_profiles = load_or_build_cluster_profiles()
+cluster_labels = load_saved_cluster_labels()
+cluster_profiles = load_or_build_cluster_profiles(cluster_labels)
 
 CLUSTER_SEGMENT_LABELS = {
     "healthy": "Healthy Patient Cluster",
@@ -1413,6 +1428,34 @@ def build_global_shap_children(model_name: str = DEFAULT_MODEL_NAME):
     )
 
 
+def build_cluster_size_content():
+    image_path = ASSETS_DIR / CLUSTER_SIZE_IMAGE
+    if image_path.exists():
+        return [html.Img(src=app.get_asset_url(image_path.name), className="insight-image")]
+
+    return [
+        dbc.Alert(
+            "Cluster size image is missing. Run src/train_models.py to regenerate patient segmentation visuals.",
+            color="warning",
+            className="analysis-alert mb-0",
+        ),
+    ]
+
+
+def build_cluster_scatter_content():
+    image_path = ASSETS_DIR / CLUSTER_SCATTER_IMAGE
+    if image_path.exists():
+        return [html.Img(src=app.get_asset_url(image_path.name), className="insight-image")]
+
+    return [
+        dbc.Alert(
+            "Cluster map image is missing. Run src/train_models.py to regenerate patient segmentation visuals.",
+            color="warning",
+            className="analysis-alert mb-0",
+        ),
+    ]
+
+
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP],
@@ -1432,6 +1475,8 @@ app.layout = build_layout(
     training_rows=len(X_train),
     probability_figure=build_empty_figure("Run a prediction to see class probabilities."),
     local_shap_figure=build_empty_figure("Submit a risk prediction to see local SHAP drivers."),
+    cluster_size_children=build_cluster_size_content(),
+    cluster_scatter_children=build_cluster_scatter_content(),
 )
 
 

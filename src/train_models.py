@@ -2,10 +2,13 @@ import pandas as pd
 import numpy as np
 import pickle
 from pathlib import Path
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from imblearn.over_sampling import SMOTENC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 from sklearn.metrics import (
     classification_report,
     accuracy_score,
@@ -34,8 +37,31 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / 'data'
 ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
 MODELS_DIR = ARTIFACTS_DIR / 'models'
+ASSETS_DIR = PROJECT_ROOT / 'assets'
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
+ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 PRIMARY_CLASSIFICATION_METRIC = 'Macro F1'
+CLUSTER_PROFILE_COLUMNS = [
+    'physical_activity_minutes_per_week',
+    'diet_score',
+    'bmi',
+    'glucose_fasting',
+    'hba1c',
+]
+CLUSTER_SEGMENT_LABELS = {
+    'healthy': 'Healthy Patient Cluster',
+    'elevated_glucose': 'Elevated Glucose Patient Cluster',
+    'unhealthy': 'Unhealthy Patient Cluster',
+}
+CLUSTER_SEGMENT_COLORS = {
+    'healthy': '#2f8f68',
+    'elevated_glucose': '#d7a255',
+    'unhealthy': '#c9774c',
+    'unknown': '#91a196',
+}
+CLUSTER_IMAGE_MAX_POINTS = 12000
+CLUSTER_SIZE_IMAGE = 'patient_segmentation_cluster_sizes.png'
+CLUSTER_MAP_IMAGE = 'patient_segmentation_cluster_map.png'
 
 #==============================================================
 # The following function loads the preprocessed training and 
@@ -399,14 +425,7 @@ def train_kmeans(X_train_scaled, feature_names):
 #==============================================================
 def save_cluster_profiles(X_train, cluster_labels):
     """Save cluster-level numeric summaries for dashboard recommendations."""
-    profile_columns = [
-        'physical_activity_minutes_per_week',
-        'diet_score',
-        'bmi',
-        'glucose_fasting',
-        'hba1c',
-    ]
-    available_columns = [column for column in profile_columns if column in X_train.columns]
+    available_columns = [column for column in CLUSTER_PROFILE_COLUMNS if column in X_train.columns]
     if not available_columns:
         raise ValueError('No cluster profile columns were found in X_train.')
 
@@ -420,6 +439,222 @@ def save_cluster_profiles(X_train, cluster_labels):
     cluster_profiles.reset_index().to_csv(cluster_profiles_path, index=False)
     print(f"Cluster profiles saved: {cluster_profiles_path}")
     return cluster_profiles
+
+
+def build_cluster_segment_keys(cluster_profiles):
+    """Assign stable descriptive names to the saved K-means clusters."""
+    if cluster_profiles is None or cluster_profiles.empty:
+        return {}
+
+    if 'cluster' in cluster_profiles.columns:
+        profile_frame = cluster_profiles.set_index('cluster')
+    else:
+        profile_frame = cluster_profiles.copy()
+
+    if any(column not in profile_frame.columns for column in CLUSTER_PROFILE_COLUMNS):
+        return {}
+
+    profiles = profile_frame[CLUSTER_PROFILE_COLUMNS].apply(pd.to_numeric, errors='coerce')
+    segment_keys = {}
+
+    overall_health_rank = (
+        profiles['physical_activity_minutes_per_week'].rank(method='dense', ascending=False)
+        + profiles['diet_score'].rank(method='dense', ascending=False)
+        + profiles['bmi'].rank(method='dense', ascending=True)
+        + profiles['glucose_fasting'].rank(method='dense', ascending=True)
+        + profiles['hba1c'].rank(method='dense', ascending=True)
+    )
+    healthiest_cluster = int(overall_health_rank.idxmin())
+    segment_keys[healthiest_cluster] = 'healthy'
+
+    remaining_clusters = [cluster_id for cluster_id in profiles.index if int(cluster_id) not in segment_keys]
+    if remaining_clusters:
+        remaining_profiles = profiles.loc[remaining_clusters]
+        glucose_risk_rank = (
+            remaining_profiles['glucose_fasting'].rank(method='dense', ascending=False)
+            + remaining_profiles['hba1c'].rank(method='dense', ascending=False)
+        )
+        highest_glucose_cluster = int(glucose_risk_rank.idxmin())
+        segment_keys[highest_glucose_cluster] = 'elevated_glucose'
+
+    for cluster_id in profiles.index:
+        cluster_key = int(cluster_id)
+        if cluster_key not in segment_keys:
+            segment_keys[cluster_key] = 'unhealthy'
+
+    return segment_keys
+
+
+def sample_cluster_projection_points(projection_frame):
+    if len(projection_frame) <= CLUSTER_IMAGE_MAX_POINTS:
+        return projection_frame.copy(), False
+
+    sample_ratio = CLUSTER_IMAGE_MAX_POINTS / len(projection_frame)
+    sampled_frames = []
+    for _, cluster_frame in projection_frame.groupby('cluster', sort=False):
+        sample_size = min(
+            len(cluster_frame),
+            max(1, int(round(len(cluster_frame) * sample_ratio))),
+        )
+        sampled_frames.append(cluster_frame.sample(n=sample_size, random_state=42))
+
+    sampled_frame = pd.concat(sampled_frames, ignore_index=True)
+    if len(sampled_frame) > CLUSTER_IMAGE_MAX_POINTS:
+        sampled_frame = sampled_frame.sample(n=CLUSTER_IMAGE_MAX_POINTS, random_state=42)
+
+    return sampled_frame.reset_index(drop=True), True
+
+
+def save_cluster_visualizations(X_train_scaled, cluster_labels, cluster_profiles, kmeans_model):
+    """Save static cluster-size and cluster-map images for the dashboard."""
+    profile_frame = cluster_profiles.reset_index() if 'cluster' not in cluster_profiles.columns else cluster_profiles.copy()
+    profile_frame['cluster'] = pd.to_numeric(profile_frame['cluster'], errors='coerce').astype(int)
+    segment_keys = build_cluster_segment_keys(profile_frame)
+
+    size_frame = profile_frame[['cluster', 'cluster_size']].copy().sort_values('cluster').reset_index(drop=True)
+    size_frame['cluster_name'] = size_frame['cluster'].map(
+        lambda cluster_id: CLUSTER_SEGMENT_LABELS.get(segment_keys.get(int(cluster_id)), f'Cluster {int(cluster_id)}')
+    )
+    size_frame['color'] = size_frame['cluster'].map(
+        lambda cluster_id: CLUSTER_SEGMENT_COLORS.get(segment_keys.get(int(cluster_id), 'unknown'), CLUSTER_SEGMENT_COLORS['unknown'])
+    )
+    size_frame['cluster_share_pct'] = size_frame['cluster_size'] / size_frame['cluster_size'].sum() * 100
+
+    size_path = ASSETS_DIR / CLUSTER_SIZE_IMAGE
+    fig, ax = plt.subplots(figsize=(8.2, 5.4))
+    bars = ax.bar(size_frame['cluster_name'], size_frame['cluster_size'], color=size_frame['color'])
+    ax.set_title('Training Patients Per Segment')
+    ax.set_ylabel('Training patients')
+    ax.grid(axis='y', alpha=0.18)
+    ax.set_axisbelow(True)
+    ax.tick_params(axis='x', rotation=14)
+    ax.set_ylim(0, size_frame['cluster_size'].max() * 1.14)
+
+    for bar, row in zip(bars, size_frame.itertuples(index=False)):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{int(row.cluster_size):,}\n({row.cluster_share_pct:.1f}%)",
+            ha='center',
+            va='bottom',
+            fontsize=9,
+        )
+
+    plt.tight_layout()
+    plt.savefig(size_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    projection_model = PCA(n_components=2, random_state=42)
+    components = projection_model.fit_transform(X_train_scaled)
+    projection_frame = pd.DataFrame(
+        {
+            'pc1': components[:, 0],
+            'pc2': components[:, 1],
+            'cluster': pd.Series(cluster_labels).astype(int).to_numpy(),
+        }
+    )
+    projection_frame['cluster_name'] = projection_frame['cluster'].map(
+        lambda cluster_id: CLUSTER_SEGMENT_LABELS.get(segment_keys.get(int(cluster_id)), f'Cluster {int(cluster_id)}')
+    )
+    sampled_projection, is_sampled = sample_cluster_projection_points(projection_frame)
+
+    centroid_points = projection_model.transform(
+        pd.DataFrame(kmeans_model.cluster_centers_, columns=X_train_scaled.columns)
+    )
+    centroid_frame = pd.DataFrame(
+        {
+            'pc1': centroid_points[:, 0],
+            'pc2': centroid_points[:, 1],
+            'cluster': np.arange(len(centroid_points), dtype=int),
+        }
+    )
+    centroid_frame['cluster_name'] = centroid_frame['cluster'].map(
+        lambda cluster_id: CLUSTER_SEGMENT_LABELS.get(segment_keys.get(int(cluster_id)), f'Cluster {int(cluster_id)}')
+    )
+    centroid_frame['color'] = centroid_frame['cluster'].map(
+        lambda cluster_id: CLUSTER_SEGMENT_COLORS.get(segment_keys.get(int(cluster_id), 'unknown'), CLUSTER_SEGMENT_COLORS['unknown'])
+    )
+
+    map_path = ASSETS_DIR / CLUSTER_MAP_IMAGE
+    fig, ax = plt.subplots(figsize=(10.4, 6.2))
+    for row in size_frame.itertuples(index=False):
+        cluster_points = sampled_projection[sampled_projection['cluster'] == row.cluster]
+        ax.scatter(
+            cluster_points['pc1'],
+            cluster_points['pc2'],
+            s=10,
+            alpha=0.28,
+            color=row.color,
+            label=row.cluster_name,
+        )
+
+    ax.scatter(
+        centroid_frame['pc1'],
+        centroid_frame['pc2'],
+        marker='D',
+        s=120,
+        color=centroid_frame['color'],
+        edgecolors='white',
+        linewidth=1.5,
+        zorder=3,
+    )
+    for row in centroid_frame.itertuples(index=False):
+        ax.annotate(
+            row.cluster_name,
+            (row.pc1, row.pc2),
+            textcoords='offset points',
+            xytext=(0, 10),
+            ha='center',
+            fontsize=9,
+        )
+
+    variance_ratio = projection_model.explained_variance_ratio_
+    ax.set_title('2D PCA View of Patient Segments')
+    ax.set_xlabel(f'Principal Component 1 ({variance_ratio[0] * 100:.1f}% variance)')
+    ax.set_ylabel(f'Principal Component 2 ({variance_ratio[1] * 100:.1f}% variance)')
+    ax.grid(alpha=0.18)
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker='o',
+            linestyle='',
+            label=row.cluster_name,
+            markerfacecolor=row.color,
+            markeredgecolor='white',
+            markeredgewidth=0.8,
+            markersize=7,
+            alpha=1.0,
+        )
+        for row in size_frame.itertuples(index=False)
+    ]
+    ax.legend(
+        handles=legend_handles,
+        loc='best',
+        frameon=True,
+        facecolor='white',
+        edgecolor='#d9e1db',
+        framealpha=0.95,
+    )
+
+    if is_sampled:
+        ax.text(
+            1.0,
+            -0.12,
+            f'Showing {len(sampled_projection):,} sampled points for readability.',
+            transform=ax.transAxes,
+            ha='right',
+            va='top',
+            fontsize=9,
+        )
+
+    plt.tight_layout()
+    plt.savefig(map_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"Cluster size image saved: {size_path}")
+    print(f"Cluster map image saved: {map_path}")
+    return size_path, map_path
 
 #==============================================================
 # The following function compares the performance of the trained 
@@ -529,7 +764,13 @@ def main():
         data['X_train_scaled'],
         data['X_train'].columns.tolist(),
     )
-    save_cluster_profiles(data['X_train'], cluster_labels)
+    cluster_profiles = save_cluster_profiles(data['X_train'], cluster_labels)
+    save_cluster_visualizations(
+        data['X_train_scaled'],
+        cluster_labels,
+        cluster_profiles,
+        kmeans_model,
+    )
 
     # ── FINAL SUMMARY ─────────────────────────────────────────────────────────
     print("\n" + "=" * 60)

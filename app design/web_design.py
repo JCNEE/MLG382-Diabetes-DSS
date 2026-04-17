@@ -102,6 +102,8 @@ def build_layout(
     training_rows: int,
     probability_figure,
     local_shap_figure,
+    cluster_size_children,
+    cluster_scatter_children,
 ):
     return html.Div(
         [
@@ -289,6 +291,56 @@ def build_layout(
                                                         ),
                                                     ],
                                                     className="g-4 align-items-start",
+                                                ),
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            html.Div(
+                                                                [
+                                                                    html.Div("Cluster Sizes", className="panel-kicker"),
+                                                                    html.H3("Training patients per segment", className="panel-title"),
+                                                                    html.P(
+                                                                        "This chart uses the saved training cluster assignments and shows how large each K-means segment is in the training data.",
+                                                                        className="panel-copy",
+                                                                    ),
+                                                                    html.Div(
+                                                                        cluster_size_children,
+                                                                        id="cluster-size-content",
+                                                                    ),
+                                                                ],
+                                                                className="surface-card figure-card cluster-size-card",
+                                                            ),
+                                                            lg=12,
+                                                            xl=12,
+                                                            className="mx-auto mb-4",
+                                                        ),
+                                                    ],
+                                                    className="g-4 align-items-stretch",
+                                                ),
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            html.Div(
+                                                                [
+                                                                    html.Div("Cluster Map", className="panel-kicker"),
+                                                                    html.H3("2D view of patient segments", className="panel-title"),
+                                                                    html.P(
+                                                                        "The scatter plot uses PCA on the scaled training data so the three K-means segments can be compared visually in two dimensions.",
+                                                                        className="panel-copy",
+                                                                    ),
+                                                                    html.Div(
+                                                                        cluster_scatter_children,
+                                                                        id="cluster-scatter-content",
+                                                                    ),
+                                                                ],
+                                                                className="surface-card figure-card cluster-scatter-card",
+                                                            ),
+                                                            lg=12,
+                                                            xl=12,
+                                                            className="mx-auto mb-4",
+                                                        ),
+                                                    ],
+                                                    className="g-4 align-items-stretch",
                                                 ),
                                             ],
                                             className="tab-section",

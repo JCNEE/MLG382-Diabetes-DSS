@@ -601,6 +601,27 @@ body {
     overflow: visible !important;
 }
 
+.cluster-scatter-card {
+    min-width: 0;
+    overflow: visible;
+    contain: none;
+}
+
+.cluster-scatter-graph {
+    width: 100%;
+    min-width: 0;
+}
+
+.cluster-scatter-card .js-plotly-plot,
+.cluster-scatter-card .plot-container,
+.cluster-scatter-card .svg-container,
+.cluster-scatter-graph,
+.cluster-scatter-graph .js-plotly-plot,
+.cluster-scatter-graph .plot-container,
+.cluster-scatter-graph .svg-container {
+    overflow: visible !important;
+}
+
 .analysis-card .card-title {
     font-size: 1.6rem;
     margin-bottom: 12px;
@@ -684,5 +705,9 @@ body {
 
     .global-importance-graph {
         min-height: 320px;
+    }
+
+    .cluster-scatter-graph {
+        min-height: 360px;
     }
 }
