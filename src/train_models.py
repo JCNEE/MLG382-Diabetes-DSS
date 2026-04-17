@@ -8,7 +8,6 @@ from imblearn.over_sampling import SMOTENC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import (
     ExtraTreesClassifier,
-    HistGradientBoostingClassifier,
     RandomForestClassifier,
 )
 from sklearn.cluster import KMeans
@@ -102,13 +101,6 @@ EXTENDED_NOTEBOOK_MODEL_BUILDERS = {
         max_features='sqrt',
         random_state=42,
         n_jobs=-1,
-    ),
-    'Hist Gradient Boosting': lambda: HistGradientBoostingClassifier(
-        learning_rate=0.05,
-        max_depth=8,
-        max_iter=250,
-        min_samples_leaf=20,
-        random_state=42,
     ),
 }
 
