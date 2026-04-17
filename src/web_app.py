@@ -61,9 +61,31 @@ build_input_card = web_design.build_input_card
 build_layout = web_design.build_layout
 load_theme_css = web_design.load_theme_css
 
-PREDICTION_MODEL_FILE = MODELS_DIR / "xgboost.pkl"
-MODEL_LABEL = "XGBoost"
-MODEL_ASSET_PREFIX = "XGBoost"
+DEFAULT_MODEL_NAME = "xgboost"
+MODEL_CONFIGS = {
+    "xgboost": {
+        "label": "XGBoost",
+        "model_file": "xgboost.pkl",
+        "asset_prefix": "XGBoost",
+        "shap_csv": "xgboost_shap_feature_importance.csv",
+    },
+    "decision_tree": {
+        "label": "Decision Tree",
+        "model_file": "decision_tree.pkl",
+        "asset_prefix": "DecisionTree",
+        "shap_csv": "decision_tree_shap_feature_importance.csv",
+    },
+    "random_forest": {
+        "label": "Random Forest",
+        "model_file": "random_forest.pkl",
+        "asset_prefix": "RandomForest",
+        "shap_csv": "random_forest_shap_feature_importance.csv",
+    },
+}
+MODEL_OPTIONS = [
+    {"label": model_config["label"], "value": model_name}
+    for model_name, model_config in MODEL_CONFIGS.items()
+]
 
 FEATURE_LABELS = {
     "Age": "Age",
@@ -96,15 +118,46 @@ def load_pickle(path: Path):
         return pickle.load(file_obj)
 
 
-def load_prediction_model():
-    if not PREDICTION_MODEL_FILE.exists():
+def normalise_model_name(model_name: str | None) -> str:
+    if model_name in MODEL_CONFIGS:
+        return model_name
+    return DEFAULT_MODEL_NAME
+
+
+def get_model_config(model_name: str | None) -> dict[str, str]:
+    return MODEL_CONFIGS[normalise_model_name(model_name)]
+
+
+def get_model_label(model_name: str | None) -> str:
+    return get_model_config(model_name)["label"]
+
+
+def get_model_asset_prefix(model_name: str | None) -> str:
+    return get_model_config(model_name)["asset_prefix"]
+
+
+def get_model_shap_path(model_name: str | None) -> Path:
+    return DATA_DIR / get_model_config(model_name)["shap_csv"]
+
+
+def get_model_file(model_name: str | None) -> Path:
+    return MODELS_DIR / get_model_config(model_name)["model_file"]
+
+
+def load_prediction_model(model_name: str):
+    model_label = get_model_label(model_name)
+    model_path = get_model_file(model_name)
+    if not model_path.exists():
         raise FileNotFoundError(
-            "Missing XGBoost model. Run src/train_models.py first."
+            f"Missing {model_label} model. Run src/train_models.py first."
         )
-    return load_pickle(PREDICTION_MODEL_FILE)
+    return load_pickle(model_path)
 
 
-PREDICTION_MODEL = load_prediction_model()
+PREDICTION_MODELS = {
+    model_name: load_prediction_model(model_name)
+    for model_name in MODEL_CONFIGS
+}
 
 target_encoder = load_pickle(ARTIFACTS_DIR / "target_encoder.pkl")
 feature_encoders = load_pickle(ARTIFACTS_DIR / "feature_encoders.pkl")
@@ -122,7 +175,7 @@ for column in train_feature_cols:
         train_fill_values[column] = float(X_train[column].mode().iloc[0])
 
 shap_background = X_train.sample(min(500, len(X_train)), random_state=42).copy()
-shap_explainer = None
+shap_explainers: dict[str, shap.TreeExplainer] = {}
 cluster_baselines = X_train[
     [
         "physical_activity_minutes_per_week",
@@ -134,8 +187,8 @@ cluster_baselines = X_train[
 ].median().to_dict()
 
 
-def load_global_shap_importance():
-    shap_path = DATA_DIR / "xgboost_shap_feature_importance.csv"
+def load_global_shap_importance(model_name: str):
+    shap_path = get_model_shap_path(model_name)
     if not shap_path.exists():
         return None
 
@@ -146,15 +199,23 @@ def load_global_shap_importance():
     return shap_frame
 
 
-GLOBAL_SHAP_IMPORTANCE = load_global_shap_importance()
+GLOBAL_SHAP_IMPORTANCE_CACHE = {
+    model_name: load_global_shap_importance(model_name)
+    for model_name in MODEL_CONFIGS
+}
 
 
-def build_global_importance_options():
-    if GLOBAL_SHAP_IMPORTANCE is None:
+def get_global_shap_importance(model_name: str | None):
+    return GLOBAL_SHAP_IMPORTANCE_CACHE.get(normalise_model_name(model_name))
+
+
+def build_global_importance_options(model_name: str | None):
+    global_shap_importance = get_global_shap_importance(model_name)
+    if global_shap_importance is None:
         return []
 
     options = []
-    if "mean_abs_shap_all_classes" in GLOBAL_SHAP_IMPORTANCE.columns:
+    if "mean_abs_shap_all_classes" in global_shap_importance.columns:
         options.append(
             {
                 "label": "All diabetes stages",
@@ -164,22 +225,22 @@ def build_global_importance_options():
 
     for class_name in target_encoder.classes_:
         column_name = f"mean_abs_shap_{class_name}"
-        if column_name in GLOBAL_SHAP_IMPORTANCE.columns:
+        if column_name in global_shap_importance.columns:
             options.append({"label": class_name, "value": column_name})
 
     return options
 
 
-GLOBAL_IMPORTANCE_OPTIONS = build_global_importance_options()
-DEFAULT_GLOBAL_IMPORTANCE_VIEW = (
-    GLOBAL_IMPORTANCE_OPTIONS[0]["value"] if GLOBAL_IMPORTANCE_OPTIONS else None
-)
+def get_default_global_importance_view(model_name: str | None):
+    options = build_global_importance_options(model_name)
+    return options[0]["value"] if options else None
 
 
 def load_primary_features():
-    if GLOBAL_SHAP_IMPORTANCE is not None:
+    default_global_importance = get_global_shap_importance(DEFAULT_MODEL_NAME)
+    if default_global_importance is not None:
         ranked = [
-            feature for feature in GLOBAL_SHAP_IMPORTANCE["feature"].tolist()
+            feature for feature in default_global_importance["feature"].tolist()
             if feature in FEATURE_COLS
         ]
         ranked = list(dict.fromkeys(ranked))
@@ -300,22 +361,29 @@ def describe_global_importance_view(selected_column: str | None) -> str:
     return "All diabetes stages"
 
 
-def build_global_importance_figure(selected_column: str | None) -> go.Figure:
-    if GLOBAL_SHAP_IMPORTANCE is None:
+def build_global_importance_figure(
+    selected_column: str | None,
+    model_name: str | None = None,
+) -> go.Figure:
+    resolved_model_name = normalise_model_name(model_name)
+    model_label = get_model_label(resolved_model_name)
+    global_shap_importance = get_global_shap_importance(resolved_model_name)
+
+    if global_shap_importance is None:
         return build_empty_figure(
-            "Run src/shap_analysis.py --model xgboost to load global feature importance by diabetes stage."
+            f"Run src/shap_analysis.py --model {resolved_model_name} to load global feature importance for {model_label}."
         )
 
     metric_column = selected_column
-    if metric_column not in GLOBAL_SHAP_IMPORTANCE.columns:
-        metric_column = DEFAULT_GLOBAL_IMPORTANCE_VIEW
+    if metric_column not in global_shap_importance.columns:
+        metric_column = get_default_global_importance_view(resolved_model_name)
 
     if metric_column is None:
         return build_empty_figure(
-            "Class-level SHAP columns are not available in data/xgboost_shap_feature_importance.csv."
+            f"Class-level SHAP columns are not available in {get_model_shap_path(resolved_model_name).name}."
         )
 
-    importance_frame = GLOBAL_SHAP_IMPORTANCE[["feature", metric_column]].copy()
+    importance_frame = global_shap_importance[["feature", metric_column]].copy()
     importance_frame[metric_column] = pd.to_numeric(
         importance_frame[metric_column], errors="coerce"
     ).fillna(0.0)
@@ -393,6 +461,16 @@ def build_input_field(column: str):
             className="wellness-control",
         )
     return build_input_card(label=label, helper_text=helper_text, control=control)
+
+
+def build_model_selector():
+    return dcc.Dropdown(
+        id="model-selector",
+        options=MODEL_OPTIONS,
+        value=DEFAULT_MODEL_NAME,
+        clearable=False,
+        className="wellness-dropdown model-selector-dropdown",
+    )
 
 
 def ordinal_category_maps():
@@ -477,14 +555,18 @@ def resolve_base_value(base_values: np.ndarray, sample_index: int, class_index: 
     raise ValueError(f"Unsupported base value shape: {base_values.shape}")
 
 
-def get_shap_explainer():
-    global shap_explainer
-    if shap_explainer is None:
-        shap_explainer = shap.TreeExplainer(
-            PREDICTION_MODEL,
+def get_prediction_model(model_name: str | None):
+    return PREDICTION_MODELS[normalise_model_name(model_name)]
+
+
+def get_shap_explainer(model_name: str | None):
+    resolved_model_name = normalise_model_name(model_name)
+    if resolved_model_name not in shap_explainers:
+        shap_explainers[resolved_model_name] = shap.TreeExplainer(
+            get_prediction_model(resolved_model_name),
             data=shap_background,
         )
-    return shap_explainer
+    return shap_explainers[resolved_model_name]
 
 
 def build_probability_figure(probabilities: np.ndarray, predicted_class: str) -> go.Figure:
@@ -516,14 +598,20 @@ def build_probability_figure(probabilities: np.ndarray, predicted_class: str) ->
     return figure
 
 
-def build_local_shap_outputs(patient_raw: pd.DataFrame, patient_encoded: pd.DataFrame):
-    model = PREDICTION_MODEL
+def build_local_shap_outputs(
+    patient_raw: pd.DataFrame,
+    patient_encoded: pd.DataFrame,
+    model_name: str | None,
+):
+    resolved_model_name = normalise_model_name(model_name)
+    model_label = get_model_label(resolved_model_name)
+    model = get_prediction_model(resolved_model_name)
     predicted_index = int(model.predict(patient_encoded)[0])
     predicted_class = target_encoder.inverse_transform([predicted_index])[0]
     probability_frame = pd.Series(model.predict_proba(patient_encoded)[0], index=model.classes_)
     predicted_probability = float(probability_frame.get(predicted_index, 0.0))
 
-    explainer = get_shap_explainer()
+    explainer = get_shap_explainer(resolved_model_name)
     shap_values, base_values = compute_shap_values(explainer, patient_encoded)
 
     if shap_values.ndim == 3:
@@ -612,9 +700,9 @@ def build_local_shap_outputs(patient_raw: pd.DataFrame, patient_encoded: pd.Data
     summary = dbc.Card(
         dbc.CardBody(
             [
-                html.H5(f"Why the Model Predicted {predicted_class}", className="card-title"),
+                html.H5(f"Why {model_label} Predicted {predicted_class}", className="card-title"),
                 html.P(
-                    f"The model assigned {predicted_probability * 100:.1f}% probability to {predicted_class}. "
+                    f"{model_label} assigned {predicted_probability * 100:.1f}% probability to {predicted_class}. "
                     f"Local SHAP starts from the class base score ({base_value:.3f}), which is the model's raw starting score for this stage before patient-specific features are applied.",
                     className="mb-2",
                 ),
@@ -1245,33 +1333,45 @@ def build_recommendations(
     )
 
 
-def build_global_shap_children():
-    summary_file = ASSETS_DIR / f"{MODEL_ASSET_PREFIX}_shap_summary.png"
+def build_global_shap_summary_content(model_name: str | None):
+    resolved_model_name = normalise_model_name(model_name)
+    model_label = get_model_label(resolved_model_name)
+    summary_file = ASSETS_DIR / f"{get_model_asset_prefix(resolved_model_name)}_shap_summary.png"
 
     if summary_file.exists():
-        summary_children = [
-            html.H6("Global SHAP Summary", className="card-title"),
+        return [
             html.P(
-                "This view shows the overall SHAP distribution across the sampled evaluation records.",
+                f"This view shows the overall SHAP distribution across the sampled evaluation records for {model_label}.",
                 className="support-copy",
             ),
             html.Img(src=app.get_asset_url(summary_file.name), className="insight-image"),
         ]
-    else:
-        summary_children = [
-            html.H6("Global SHAP Summary", className="card-title"),
-            dbc.Alert(
-                "XGBoost SHAP summary image is missing. Run src/shap_analysis.py --model xgboost.",
-                color="warning",
-                className="analysis-alert mb-0",
-            ),
-        ]
+
+    return [
+        dbc.Alert(
+            f"{model_label} SHAP summary image is missing. Run src/shap_analysis.py --model {resolved_model_name}.",
+            color="warning",
+            className="analysis-alert mb-0",
+        ),
+    ]
+
+
+def build_global_shap_children(model_name: str = DEFAULT_MODEL_NAME):
+    default_importance_view = get_default_global_importance_view(model_name)
 
     return dbc.Row(
         [
             dbc.Col(
                 dbc.Card(
-                    dbc.CardBody(summary_children),
+                    dbc.CardBody(
+                        [
+                            html.H6("Global SHAP Summary", className="card-title"),
+                            html.Div(
+                                id="global-shap-summary-content",
+                                children=build_global_shap_summary_content(model_name),
+                            ),
+                        ]
+                    ),
                     className="analysis-card figure-surface",
                 ),
                 width=12,
@@ -1288,16 +1388,16 @@ def build_global_shap_children():
                             ),
                             dcc.Dropdown(
                                 id="global-importance-view",
-                                options=GLOBAL_IMPORTANCE_OPTIONS,
-                                value=DEFAULT_GLOBAL_IMPORTANCE_VIEW,
+                                options=build_global_importance_options(model_name),
+                                value=default_importance_view,
                                 placeholder="No class-level SHAP data available",
                                 clearable=False,
-                                disabled=not GLOBAL_IMPORTANCE_OPTIONS,
+                                disabled=not build_global_importance_options(model_name),
                                 className="wellness-dropdown global-importance-dropdown mb-3",
                             ),
                             dcc.Graph(
                                 id="global-importance-figure",
-                                figure=build_global_importance_figure(DEFAULT_GLOBAL_IMPORTANCE_VIEW),
+                                figure=build_global_importance_figure(default_importance_view, model_name),
                                 config={"displayModeBar": False, "staticPlot": True},
                                 responsive=True,
                                 className="centered-graph global-importance-graph",
@@ -1326,7 +1426,8 @@ app.layout = build_layout(
     primary_inputs=[build_input_field(column) for column in PRIMARY_FEATURES],
     secondary_inputs=[build_input_field(column) for column in SECONDARY_FEATURES],
     global_shap_children=build_global_shap_children(),
-    model_label=MODEL_LABEL,
+    model_selector=build_model_selector(),
+    model_label=html.Span(get_model_label(DEFAULT_MODEL_NAME), id="active-model-label"),
     feature_count=len(FEATURE_COLS),
     training_rows=len(X_train),
     probability_figure=build_empty_figure("Run a prediction to see class probabilities."),
@@ -1335,11 +1436,30 @@ app.layout = build_layout(
 
 
 @app.callback(
+    Output("active-model-label", "children"),
+    Output("global-shap-summary-content", "children"),
+    Output("global-importance-view", "options"),
+    Output("global-importance-view", "value"),
+    Input("model-selector", "value"),
+)
+def update_selected_model(selected_model):
+    resolved_model_name = normalise_model_name(selected_model)
+    options = build_global_importance_options(resolved_model_name)
+    return (
+        get_model_label(resolved_model_name),
+        build_global_shap_summary_content(resolved_model_name),
+        options,
+        get_default_global_importance_view(resolved_model_name),
+    )
+
+
+@app.callback(
     Output("global-importance-figure", "figure"),
+    Input("model-selector", "value"),
     Input("global-importance-view", "value"),
 )
-def update_global_importance_figure(selected_column):
-    return build_global_importance_figure(selected_column)
+def update_global_importance_figure(selected_model, selected_column):
+    return build_global_importance_figure(selected_column, selected_model)
 
 
 @app.callback(
@@ -1348,9 +1468,10 @@ def update_global_importance_figure(selected_column):
     Output("local-shap-summary", "children"),
     Output("local-shap-figure", "figure"),
     Input("predict-btn", "n_clicks"),
+    Input("model-selector", "value"),
     [State(f"input-{column}", "value") for column in FEATURE_COLS],
 )
-def predict_risk(n_clicks, *values):
+def predict_risk(n_clicks, selected_model, *values):
     if not n_clicks:
         return (
             "",
@@ -1359,10 +1480,12 @@ def predict_risk(n_clicks, *values):
             build_empty_figure("Submit a risk prediction to see local SHAP drivers."),
         )
 
+    resolved_model_name = normalise_model_name(selected_model)
+    model_label = get_model_label(resolved_model_name)
     raw_inputs = dict(zip(FEATURE_COLS, values))
     patient_raw, patient_encoded, _, _ = prepare_patient_features(raw_inputs)
 
-    model = PREDICTION_MODEL
+    model = get_prediction_model(resolved_model_name)
     predicted_index = int(model.predict(patient_encoded)[0])
     predicted_class = target_encoder.inverse_transform([predicted_index])[0]
 
@@ -1380,11 +1503,11 @@ def predict_risk(n_clicks, *values):
             [
                 html.H4(f"Predicted Diabetes Stage: {predicted_class}", className="card-title"),
                 html.P(
-                    f"The model found this patient most consistent with the {predicted_class} stage based on the current lifestyle, demographic, and clinical inputs.",
+                    f"{model_label} found this patient most consistent with the {predicted_class} stage based on the current lifestyle, demographic, and clinical inputs.",
                     className="mb-2",
                 ),
                 html.P(
-                    f"Model confidence is {confidence * 100:.1f}%, meaning {predicted_class} received the highest predicted probability among all available diabetes stages. This reflects model certainty, not a confirmed diagnosis.",
+                    f"{model_label} confidence is {confidence * 100:.1f}%, meaning {predicted_class} received the highest predicted probability among all available diabetes stages. This reflects model certainty, not a confirmed diagnosis.",
                     className="mb-2",
                 ),
                 html.P(
@@ -1397,7 +1520,11 @@ def predict_risk(n_clicks, *values):
     )
 
     probability_figure = build_probability_figure(aligned_probabilities, predicted_class)
-    _, shap_summary, shap_figure = build_local_shap_outputs(patient_raw, patient_encoded)
+    _, shap_summary, shap_figure = build_local_shap_outputs(
+        patient_raw,
+        patient_encoded,
+        resolved_model_name,
+    )
 
     return prediction_card, probability_figure, shap_summary, shap_figure
 
@@ -1407,18 +1534,20 @@ def predict_risk(n_clicks, *values):
     Output("recommendations-output", "children"),
     Input("cluster-btn", "n_clicks"),
     Input("predict-btn", "n_clicks"),
+    Input("model-selector", "value"),
     [State(f"input-{column}", "value") for column in FEATURE_COLS],
 )
-def assign_cluster(cluster_clicks, predict_clicks, *values):
+def assign_cluster(cluster_clicks, predict_clicks, selected_model, *values):
     if not cluster_clicks and not predict_clicks:
         return dash.no_update, dash.no_update
 
+    resolved_model_name = normalise_model_name(selected_model)
     raw_inputs = dict(zip(FEATURE_COLS, values))
     patient_raw, patient_encoded, patient_scaled, missing_columns = prepare_patient_features(raw_inputs)
     cluster_id = int(kmeans_model.predict(patient_scaled)[0])
     cluster_name = get_cluster_display_name(cluster_id)
     cluster_meaning = build_cluster_meaning(cluster_id)
-    predicted_index = int(PREDICTION_MODEL.predict(patient_encoded)[0])
+    predicted_index = int(get_prediction_model(resolved_model_name).predict(patient_encoded)[0])
     predicted_class = target_encoder.inverse_transform([predicted_index])[0]
 
     triggered_input = None
