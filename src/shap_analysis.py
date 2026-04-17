@@ -27,6 +27,7 @@ MODEL_LABELS = {
     "random_forest": "RandomForest",
     "xgboost": "XGBoost",
 }
+ALL_MODELS = tuple(MODEL_FILES)
 
 #==============================================================
 # The following function parses command-line arguments for the 
@@ -304,21 +305,29 @@ def save_waterfall_plot(
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
 
-#==============================================================
-# Main function to run the SHAP analysis and generate plots and CSV
-#==============================================================
-def main() -> int:
-    args = parse_args()
 
-    output_dir = args.output_dir.resolve()
-    csv_dir = args.csv_dir.resolve()
+def run_shap_analysis(
+    model_name: str,
+    *,
+    background_size: int = 500,
+    evaluation_size: int = 1000,
+    max_display: int = 15,
+    random_state: int = 42,
+    waterfall_index: int = 0,
+    skip_waterfall: bool = False,
+    output_dir: Path = ASSETS_DIR,
+    csv_dir: Path = DATA_DIR,
+) -> dict:
+    """Run the shared SHAP workflow so notebooks can import it directly."""
+    output_dir = Path(output_dir).resolve()
+    csv_dir = Path(csv_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_dir.mkdir(parents=True, exist_ok=True)
 
-    model, target_encoder, X_train, X_test = load_pipeline_outputs(args.model)
+    model, target_encoder, X_train, X_test = load_pipeline_outputs(model_name)
 
-    background = sample_frame(X_train, args.background_size, args.random_state)
-    X_eval = sample_frame(X_test, args.evaluation_size, args.random_state)
+    background = sample_frame(X_train, background_size, random_state)
+    X_eval = sample_frame(X_test, evaluation_size, random_state)
 
     explainer = shap.TreeExplainer(model, data=background)
     values, base_values = compute_shap_values(explainer, X_eval)
@@ -327,11 +336,11 @@ def main() -> int:
     projected_values = predicted_class_matrix(values, predictions)
     class_names = np.asarray(target_encoder.classes_)
 
-    model_label = MODEL_LABELS[args.model]
+    model_label = MODEL_LABELS[model_name]
     summary_path = output_dir / f"{model_label}_shap_summary.png"
     bar_path = output_dir / f"{model_label}_shap_bar.png"
     waterfall_path = output_dir / f"{model_label}_shap_waterfall.png"
-    csv_path = csv_dir / f"{args.model}_shap_feature_importance.csv"
+    csv_path = csv_dir / f"{model_name}_shap_feature_importance.csv"
 
     importance_df = build_feature_importance(
         values,
@@ -346,16 +355,17 @@ def main() -> int:
         X_eval,
         model_label,
         summary_path,
-        args.max_display,
+        max_display,
     )
     save_bar_plot(
         importance_df,
         model_label,
         bar_path,
-        args.max_display,
+        max_display,
     )
 
-    if not args.skip_waterfall:
+    saved_waterfall_path = None
+    if not skip_waterfall:
         save_waterfall_plot(
             values,
             base_values,
@@ -363,19 +373,51 @@ def main() -> int:
             predictions,
             class_names,
             model_label,
-            args.waterfall_index,
+            waterfall_index,
             waterfall_path,
-            args.max_display,
+            max_display,
         )
+        saved_waterfall_path = waterfall_path
+
+    return {
+        "model_name": model_name,
+        "model_label": model_label,
+        "importance_df": importance_df,
+        "background_rows": len(background),
+        "evaluation_rows": len(X_eval),
+        "class_names": class_names,
+        "summary_path": summary_path,
+        "bar_path": bar_path,
+        "waterfall_path": saved_waterfall_path,
+        "csv_path": csv_path,
+    }
+
+#==============================================================
+# Main function to run the SHAP analysis and generate plots and CSV
+#==============================================================
+def main() -> int:
+    args = parse_args()
+
+    result = run_shap_analysis(
+        args.model,
+        background_size=args.background_size,
+        evaluation_size=args.evaluation_size,
+        max_display=args.max_display,
+        random_state=args.random_state,
+        waterfall_index=args.waterfall_index,
+        skip_waterfall=args.skip_waterfall,
+        output_dir=args.output_dir,
+        csv_dir=args.csv_dir,
+    )
 
     print(f"Model analysed: {args.model}")
-    print(f"Background rows: {len(background)}")
-    print(f"Evaluation rows: {len(X_eval)}")
-    print(f"Saved summary plot: {summary_path}")
-    print(f"Saved bar plot: {bar_path}")
-    if not args.skip_waterfall:
-        print(f"Saved waterfall plot: {waterfall_path}")
-    print(f"Saved feature importance CSV: {csv_path}")
+    print(f"Background rows: {result['background_rows']}")
+    print(f"Evaluation rows: {result['evaluation_rows']}")
+    print(f"Saved summary plot: {result['summary_path']}")
+    print(f"Saved bar plot: {result['bar_path']}")
+    if result['waterfall_path'] is not None:
+        print(f"Saved waterfall plot: {result['waterfall_path']}")
+    print(f"Saved feature importance CSV: {result['csv_path']}")
 
     return 0
 

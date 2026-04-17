@@ -6,7 +6,11 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from imblearn.over_sampling import SMOTENC
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import (
@@ -62,6 +66,59 @@ CLUSTER_SEGMENT_COLORS = {
 CLUSTER_IMAGE_MAX_POINTS = 12000
 CLUSTER_SIZE_IMAGE = 'patient_segmentation_cluster_sizes.png'
 CLUSTER_MAP_IMAGE = 'patient_segmentation_cluster_map.png'
+
+CORE_MODEL_BUILDERS = {
+    'Decision Tree': lambda: DecisionTreeClassifier(
+        max_depth=10,
+        min_samples_leaf=20,
+        min_samples_split=40,
+        random_state=42,
+    ),
+    'Random Forest': lambda: RandomForestClassifier(
+        n_estimators=150,
+        max_depth=15,
+        min_samples_leaf=20,
+        max_features='sqrt',
+        random_state=42,
+        n_jobs=-1,
+    ),
+    'XGBoost': lambda: xgb.XGBClassifier(
+        n_estimators=300,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        min_child_weight=5,
+        random_state=42,
+        eval_metric='mlogloss',
+        n_jobs=-1,
+    ),
+}
+
+EXTENDED_NOTEBOOK_MODEL_BUILDERS = {
+    'Extra Trees': lambda: ExtraTreesClassifier(
+        n_estimators=250,
+        min_samples_leaf=10,
+        max_features='sqrt',
+        random_state=42,
+        n_jobs=-1,
+    ),
+    'Hist Gradient Boosting': lambda: HistGradientBoostingClassifier(
+        learning_rate=0.05,
+        max_depth=8,
+        max_iter=250,
+        min_samples_leaf=20,
+        random_state=42,
+    ),
+}
+
+
+def get_model_builders(include_extended=False):
+    """Return the shared model registry used by the training script and notebook."""
+    model_builders = dict(CORE_MODEL_BUILDERS)
+    if include_extended:
+        model_builders.update(EXTENDED_NOTEBOOK_MODEL_BUILDERS)
+    return model_builders
 
 #==============================================================
 # The following function loads the preprocessed training and 
@@ -157,9 +214,19 @@ def balance_training_data(X_train, y_train, target_encoder):
 # The following line defines the list of feature columns by 
 # combining numeric, binary, ordinal, and nominal columns.
 #==============================================================
-def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
-                         X_train_balanced=None, y_train_balanced=None):
-    
+def evaluate_classifier_outputs(
+    model_name,
+    model,
+    X_test,
+    y_test,
+    target_encoder,
+    X_train_balanced=None,
+    y_train_balanced=None,
+    *,
+    save_confusion_csv=True,
+    verbose=True,
+):
+    """Return notebook-friendly model outputs while preserving the script metrics."""
     class_labels = np.arange(len(target_encoder.classes_))
     y_pred = model.predict(X_test)
     proba_frame = pd.DataFrame(
@@ -192,40 +259,55 @@ def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
         index=target_encoder.classes_,
         columns=target_encoder.classes_,
     )
-    confusion_path = (
-        ARTIFACTS_DIR / f"{model_name.lower().replace(' ', '_')}_confusion_matrix.csv"
+    confusion_path = None
+    if save_confusion_csv:
+        confusion_path = (
+            ARTIFACTS_DIR / f"{model_name.lower().replace(' ', '_')}_confusion_matrix.csv"
+        )
+        confusion_df.to_csv(confusion_path)
+
+    report_text = classification_report(
+        y_test,
+        y_pred,
+        labels=class_labels,
+        target_names=target_encoder.classes_,
+        zero_division=0,
     )
-    confusion_df.to_csv(confusion_path)
-
-
-    # ── Print results ─────────────────────────────────────────────────────────
-    print(f"\nMacro F1:              {macro_f1:.4f}")
-    print(f"Accuracy:              {accuracy:.4f}")
-    # FIX: highlight when balanced accuracy diverges from plain accuracy — that gap
-    # directly measures how much the model is coasting on majority-class prevalence.
-    print(f"Balanced Accuracy:     {bal_accuracy:.4f}  ← fairer metric for imbalanced data")
-    print(f"MCC:                   {mcc:.4f}  ← -1 worst | 0 random | 1 perfect")
-    print(f"Macro Precision:       {macro_precision:.4f}")
-    print(f"Weighted Precision:    {weighted_precision:.4f}")
-    print(f"Weighted ROC-AUC(OvR): {weighted_roc_auc:.4f}")
-
-    # FIX: per-class ROC-AUC — key for spotting if Type 1 / Gestational are ignored
-    print("\nPer-Class ROC-AUC (OvR):")
-    for cls_name, auc_val in zip(target_encoder.classes_, per_class_roc_auc):
-        print(f"   {cls_name}: {auc_val:.4f}")
-
-    print("\nClassification Report:")
-    print(
+    report_df = pd.DataFrame(
         classification_report(
-            y_test, y_pred,
+            y_test,
+            y_pred,
             labels=class_labels,
             target_names=target_encoder.classes_,
             zero_division=0,
+            output_dict=True,
         )
-    )
-    print("\nConfusion Matrix:")
-    print(confusion_df.to_string())
-    print(f"\nConfusion matrix saved: {confusion_path}")
+    ).transpose()
+
+
+    # ── Print results ─────────────────────────────────────────────────────────
+    if verbose:
+        print(f"\nMacro F1:              {macro_f1:.4f}")
+        print(f"Accuracy:              {accuracy:.4f}")
+        # FIX: highlight when balanced accuracy diverges from plain accuracy — that gap
+        # directly measures how much the model is coasting on majority-class prevalence.
+        print(f"Balanced Accuracy:     {bal_accuracy:.4f}  ← fairer metric for imbalanced data")
+        print(f"MCC:                   {mcc:.4f}  ← -1 worst | 0 random | 1 perfect")
+        print(f"Macro Precision:       {macro_precision:.4f}")
+        print(f"Weighted Precision:    {weighted_precision:.4f}")
+        print(f"Weighted ROC-AUC(OvR): {weighted_roc_auc:.4f}")
+
+        # FIX: per-class ROC-AUC — key for spotting if Type 1 / Gestational are ignored
+        print("\nPer-Class ROC-AUC (OvR):")
+        for cls_name, auc_val in zip(target_encoder.classes_, per_class_roc_auc):
+            print(f"   {cls_name}: {auc_val:.4f}")
+
+        print("\nClassification Report:")
+        print(report_text)
+        print("\nConfusion Matrix:")
+        print(confusion_df.to_string())
+        if confusion_path is not None:
+            print(f"\nConfusion matrix saved: {confusion_path}")
 
     # ── Optional CV (FIX) ─────────────────────────────────────────────────────
     # Cross-validate on SMOTE-balanced training data.
@@ -233,7 +315,8 @@ def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
     # real-world imbalanced distribution.  Treat it as an overfitting indicator.
     cv_results = None
     if X_train_balanced is not None and y_train_balanced is not None:
-        print("\nStratified 5-Fold CV (on SMOTE-balanced training data):")
+        if verbose:
+            print("\nStratified 5-Fold CV (on SMOTE-balanced training data):")
         skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
         cv = cross_validate(
             model, X_train_balanced, y_train_balanced,
@@ -246,8 +329,9 @@ def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
         )
         cv_macro_f1  = cv['test_macro_f1']
         cv_bal_acc   = cv['test_balanced_accuracy']
-        print(f"   Macro F1:          {cv_macro_f1.mean():.4f} ± {cv_macro_f1.std():.4f}")
-        print(f"   Balanced Accuracy: {cv_bal_acc.mean():.4f} ± {cv_bal_acc.std():.4f}")
+        if verbose:
+            print(f"   Macro F1:          {cv_macro_f1.mean():.4f} ± {cv_macro_f1.std():.4f}")
+            print(f"   Balanced Accuracy: {cv_bal_acc.mean():.4f} ± {cv_bal_acc.std():.4f}")
         cv_results = {
             'CV Macro F1 Mean': cv_macro_f1.mean(),
             'CV Macro F1 Std':  cv_macro_f1.std(),
@@ -266,7 +350,69 @@ def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
     if cv_results:
         metrics.update(cv_results)
 
-    return metrics
+    return {
+        'metrics': metrics,
+        'confusion': confusion,
+        'confusion_df': confusion_df,
+        'report': report_df,
+        'y_pred': y_pred,
+        'y_proba': y_proba,
+        'confusion_path': confusion_path,
+    }
+
+
+def evaluate_classifier(model_name, model, X_test, y_test, target_encoder,
+                         X_train_balanced=None, y_train_balanced=None):
+    evaluation = evaluate_classifier_outputs(
+        model_name,
+        model,
+        X_test,
+        y_test,
+        target_encoder,
+        X_train_balanced,
+        y_train_balanced,
+        save_confusion_csv=True,
+        verbose=True,
+    )
+    return evaluation['metrics']
+
+
+def run_modeling_experiments(
+    X_fit,
+    y_fit,
+    X_test,
+    y_test,
+    target_encoder,
+    *,
+    include_extended=False,
+    model_builders=None,
+):
+    """Run the shared notebook model comparison without rewriting evaluation logic."""
+    builders = model_builders or get_model_builders(include_extended=include_extended)
+    evaluations = {}
+    comparison_rows = []
+
+    for model_name, build_model in builders.items():
+        model = build_model()
+        model.fit(X_fit, y_fit)
+        evaluation = evaluate_classifier_outputs(
+            model_name,
+            model,
+            X_test,
+            y_test,
+            target_encoder,
+            save_confusion_csv=False,
+            verbose=False,
+        )
+        evaluation['model'] = model
+        evaluations[model_name] = evaluation
+        comparison_rows.append(evaluation['metrics'])
+
+    comparison = pd.DataFrame(comparison_rows).sort_values(
+        [PRIMARY_CLASSIFICATION_METRIC, 'Balanced Accuracy', 'Weighted ROC-AUC'],
+        ascending=False,
+    ).reset_index(drop=True)
+    return evaluations, comparison
 
 #============================
 # Risk Classification Models
@@ -280,12 +426,7 @@ def train_decision_tree(X_train, X_test, y_train, y_test, target_encoder):
     # NOTE: class_weight is NOT set here because SMOTENC already balanced the
     # training data.  Adding class_weight='balanced' on top of SMOTE would
     # double-penalise the majority classes and hurt overall precision.
-    dt = DecisionTreeClassifier(
-        max_depth=10,
-        min_samples_leaf=20,      # FIX: prevents tiny leaves that memorise SMOTE noise
-        min_samples_split=40,     # FIX: requires meaningful splits, reduces overfitting
-        random_state=42,
-    )
+    dt = CORE_MODEL_BUILDERS['Decision Tree']()
     dt.fit(X_train, y_train)
 
     metrics = evaluate_classifier(
@@ -306,14 +447,7 @@ def train_random_forest(X_train, X_test, y_train, y_test, target_encoder):
     print("RANDOM FOREST CLASSIFIER")
     print("=" * 60)
 
-    rf = RandomForestClassifier(
-        n_estimators=150,         # FIX: more trees = more stable predictions for minority classes
-        max_depth=15,
-        min_samples_leaf=20,      # FIX: prevents leaf nodes that only contain SMOTE samples
-        max_features='sqrt',      # good default for 28 features (≈ 5 features per split)
-        random_state=42,
-        n_jobs=-1,
-    )
+    rf = CORE_MODEL_BUILDERS['Random Forest']()
     rf.fit(X_train, y_train)
 
     metrics = evaluate_classifier(
@@ -349,17 +483,7 @@ def train_xgboost(X_train, X_test, y_train, y_test, target_encoder):
     print("XGBOOST CLASSIFIER")
     print("=" * 60)
 
-    xgb_model = xgb.XGBClassifier(
-        n_estimators=300,          
-        max_depth=6,
-        learning_rate=0.05,        
-        subsample=0.8,             
-        colsample_bytree=0.8,      
-        min_child_weight=5,        
-        random_state=42,
-        eval_metric='mlogloss',
-        n_jobs=-1,
-    )
+    xgb_model = CORE_MODEL_BUILDERS['XGBoost']()
 
 
     xgb_model.fit(X_train, y_train)
@@ -503,6 +627,11 @@ def sample_cluster_projection_points(projection_frame):
         sampled_frame = sampled_frame.sample(n=CLUSTER_IMAGE_MAX_POINTS, random_state=42)
 
     return sampled_frame.reset_index(drop=True), True
+
+
+def get_cluster_visualization_paths():
+    """Return the saved dashboard image paths for notebook display."""
+    return ASSETS_DIR / CLUSTER_SIZE_IMAGE, ASSETS_DIR / CLUSTER_MAP_IMAGE
 
 
 def save_cluster_visualizations(X_train_scaled, cluster_labels, cluster_profiles, kmeans_model):
